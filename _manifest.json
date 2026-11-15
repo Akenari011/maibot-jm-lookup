@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "github.akenari011.jm-lookup",
   "version": "1.0.0",
-  "name": "禁漫号查询",
+  "name": "麦麦看本",
   "description": "群里出现禁漫天堂本子号时，自动抓取标题和作者并回复。支持前缀/纯数字触发、自定义前缀、冷却、无结果策略、引用/合并转发、封面本地打码与漏检兜底。",
   "author": {
     "name": "Akenari011",

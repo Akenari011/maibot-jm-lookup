@@ -1,4 +1,4 @@
-"""禁漫号查询插件。
+"""麦麦看本（禁漫号查询插件）。
 
 群里出现「禁漫本子号」（JM123 / 禁漫123 / JM123456 或纯数字）时，
 自动抓取该本子的标题和作者并回帖；回帖可引用原消息、可打包成聊天记录、结果可注入上下文。
@@ -49,7 +49,7 @@ class PluginSectionConfig(PluginConfigBase):
 class JmConfig(PluginConfigBase):
     """`[jm]` 配置节（触发 → 抓取 → 回复 → 发送 → 打码/兜底）。"""
 
-    __ui_label__ = "禁漫查询"
+    __ui_label__ = "麦麦看本"
     __ui_icon__ = "search"
     __ui_order__ = 1
 
