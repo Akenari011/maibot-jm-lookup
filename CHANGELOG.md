@@ -8,3 +8,6 @@
 - 支持引用原消息 / 合并转发（聊天记录）/ 注入上下文 / 分群开关 / 冷却
 - 封面本地 AI 打码（onnxruntime 服务，马赛克/模糊），支持按部位类别与漏检兜底
 - `manifest` 声明 `python_package` 依赖（jmcomic / httpx），宿主可自动准备
+- 插件显示名：麦麦看本；插件头像 icon
+- 允许使用代理服务（支持 http/socks5），仅作用于 jmcomic 抓取
+- 配置页「检测 API / 代理 / 分流」按钮 + `/jmcheck` 命令：批量测试 jmcomic 全部分流（API+HTML）本机可用性/延迟
