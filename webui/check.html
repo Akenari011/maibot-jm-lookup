@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>麦麦看本 · 设置</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 24px 48px; background:var(--maibot-background,#f7f7f8); color:var(--maibot-foreground,#1f2328); font-family:var(--maibot-font-body,system-ui,-apple-system,"Segoe UI",sans-serif); line-height:1.6; }
+  .wrap { max-width: 980px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--maibot-muted,#6b7280); font-size:13px; margin-bottom:16px; }
+  .card { background:var(--maibot-surface,#fff); border:1px solid var(--maibot-border,#e5e7eb); border-radius:12px; padding:16px 18px; margin-bottom:14px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .card h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .card h2 .dot { width:8px; height:8px; border-radius:50%; background:var(--maibot-primary,#f97316); }
+  .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px 18px; }
+  @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:13px; font-weight:500; }
+  .field .hint { font-size:12px; color:var(--maibot-muted,#9ca3af); }
+  input[type=text], input[type=number], select, textarea {
+    width:100%; border:1px solid var(--maibot-border,#d1d5db); background:var(--maibot-surface,#fff); color:inherit;
+    border-radius:8px; padding:7px 10px; font-size:13px; font-family:inherit;
+  }
+  textarea { min-height:56px; resize:vertical; }
+  .switch { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .switch input { width:16px; height:16px; accent-color:var(--maibot-primary,#f97316); }
+  button { border:1px solid var(--maibot-border,#d1d5db); background:var(--maibot-surface,#fff); color:inherit; border-radius:8px; padding:7px 14px; font-size:13px; cursor:pointer; transition:all .15s; }
+  button:hover { border-color:var(--maibot-primary,#f97316); color:var(--maibot-primary,#f97316); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.primary { background:var(--maibot-primary,#f97316); border-color:transparent; color:#fff; }
+  button.danger { color:#b91c1c; border-color:#fca5a5; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .status { margin-top:10px; padding:9px 12px; border-radius:8px; font-size:13px; white-space:pre-wrap; word-break:break-word; background:var(--maibot-soft,#f9fafb); border:1px dashed var(--maibot-border,#e5e7eb); }
+  .status.success { color:#15803d; border-color:#86efac; background:#f0fdf4; }
+  .status.warning { color:#b45309; border-color:#fcd34d; background:#fffbeb; }
+  .status.error { color:#b91c1c; border-color:#fca5a5; background:#fef2f2; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--maibot-border,#eef0f2); }
+  th { color:var(--maibot-muted,#6b7280); font-weight:500; }
+  td.ok { color:#15803d; } td.bad { color:#b91c1c; }
+  .savebar { position:sticky; bottom:12px; display:flex; justify-content:flex-end; gap:10px; padding:10px 14px; background:color-mix(in srgb, var(--maibot-surface,#fff) 88%, transparent); border:1px solid var(--maibot-border,#e5e7eb); border-radius:12px; backdrop-filter:blur(6px); }
+  .footer { color:var(--maibot-muted,#9ca3af); font-size:12px; margin-top:18px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>麦麦看本 · 设置</h1>
+  <div class="sub">全部设置都在这里；分群 / 私聊可单独覆盖「发图」和「打码」。</div>
+
+  <div class="card"><h2><span class="dot"></span>基础 / 触发</h2><div class="grid" id="sec-base"></div></div>
+  <div class="card"><h2><span class="dot"></span>回复</h2><div class="grid" id="sec-reply"></div></div>
+  <div class="card"><h2><span class="dot"></span>发送</h2><div class="grid" id="sec-send"></div></div>
+  <div class="card"><h2><span class="dot"></span>打码</h2><div class="grid" id="sec-mask"></div>
+    <div class="row" style="margin-top:12px"><button id="btn-api">检测打码 API</button></div>
+    <div class="status" id="api-status">未检测。</div>
+  </div>
+  <div class="card"><h2><span class="dot"></span>代理设置</h2><div class="grid" id="sec-proxy"></div>
+    <div class="row" style="margin-top:12px"><button id="btn-proxy">测试代理</button></div>
+    <div class="status" id="proxy-status">未检测。</div>
+  </div>
+
+  <div class="card"><h2><span class="dot"></span>jmcomic 分流设置</h2>
+    <div class="row"><button id="btn-domains">检测 jmcomic 分流</button><span class="sub" id="domain-summary" style="margin:0"></span></div>
+    <table id="domain-table" style="display:none"><thead><tr><th>类型</th><th>分流域名</th><th>可调用</th><th>耗时</th><th>信息</th></tr></thead><tbody id="domain-body"></tbody></table>
+    <div class="status" id="domains-status">未检测。</div>
+    <div class="row" style="margin-top:14px">
+      <span style="font-size:13px">手动选择分流：</span>
+      <select id="domain-select" style="max-width:280px"></select>
+      <button class="primary" id="btn-save-domain">保存分流</button>
+    </div>
+    <div class="status" id="save-domain-status" style="display:none"></div>
+  </div>
+
+  <div class="card"><h2><span class="dot"></span>分群 / 私聊覆盖</h2>
+    <div class="sub" style="margin:0 0 8px">留空继承全局；填群号（群聊）或用户ID/会话ID（私聊），可单独控制发图与打码。</div>
+    <div class="row">
+      <input type="text" id="sess-id" placeholder="群号 或 私聊 用户ID/会话ID" style="max-width:280px">
+      <select id="sess-cover"><option value="inherit">发图：继承</option><option value="true">发图：开</option><option value="false">发图：关</option></select>
+      <select id="sess-mask"><option value="inherit">打码：继承</option><option value="true">打码：开</option><option value="false">打码：关</option></select>
+      <button class="primary" id="btn-save-session">添加 / 保存</button>
+    </div>
+    <table id="sess-table"><thead><tr><th>群号 / 会话</th><th>发图</th><th>打码</th><th></th></tr></thead><tbody id="sess-body"></tbody></table>
+    <div class="status" id="sess-status" style="display:none"></div>
+  </div>
+
+  <div class="savebar"><span class="sub" id="save-hint" style="margin:0;align-self:center"></span><button class="primary" id="btn-save-all">保存全部设置</button></div>
+  <div class="footer">麦麦看本 v1.0.0</div>
+</div>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+let settings = null, status = null, pollTimer = null;
+
+const SECTIONS = {
+  'sec-base': [
+    ['plugin.enabled','启用插件','switch'],
+    ['jm.enabled','启用查询','switch'],
+    ['jm.allowed_groups','启用群（留空=全部）','list','群号/会话ID，逗号分隔；留空=所有群'],
+    ['jm.trigger_mode','触发模式','select',[['prefix','prefix（前缀+数字）'],['any','any（纯数字）']]],
+    ['jm.prefixes','触发前缀','list','逗号分隔，仅 prefix 模式'],
+    ['jm.min_digits','最少位数','number'],
+    ['jm.max_digits','最多位数','number'],
+    ['jm.cooldown_seconds','冷却(秒)','number'],
+    ['jm.request_timeout','超时(秒)','number'],
+  ],
+  'sec-reply': [
+    ['jm.send_author','显示作者','switch'],
+    ['jm.reply_template','回复模板','text','{title} 标题，{author} 作者'],
+    ['jm.on_not_found','无结果处理','select',[['silent','silent（不回复）'],['reply','reply（回一句）']]],
+    ['jm.not_found_text','无结果文案','text'],
+  ],
+  'sec-send': [
+    ['jm.send_cover','发送封面','switch'],
+    ['jm.bundle_forward','打包成聊天记录（关=分开发）','switch'],
+    ['jm.quote_original','引用原消息','switch'],
+    ['jm.inject_context','注入上下文','switch'],
+  ],
+  'sec-mask': [
+    ['jm.masking_enabled','启用打码服务','switch'],
+    ['jm.mosaic_style','打码样式','select',[['mosaic','mosaic 马赛克'],['blur','blur 模糊']]],
+    ['jm.ahm_api_url','打码 API 地址','text'],
+    ['jm.fallback_enabled','启用漏检兜底','switch'],
+    ['jm.fallback','兜底方式','select',[['mosaic','mosaic 整图马赛克'],['blur','blur 整图模糊'],['skip','skip 不发封面']]],
+    ['jm.fallback_cover_ratio','兜底覆盖阈值','number','0=关闭（只按0框兜底）'],
+    ['jm.min_boxes','兜底最少框数','number'],
+  ],
+  'sec-proxy': [
+    ['jm.proxy_enabled','允许使用代理服务','switch'],
+    ['jm.proxy_url','代理地址','text','http://127.0.0.1:7890 或 socks5://...'],
+  ],
+};
+
+function getPath(obj, path) { return path.split('.').reduce((o,k)=>o?.[k], obj); }
+function setPath(obj, path, val) { const ks=path.split('.'); let o=obj; for (let i=0;i<ks.length-1;i++){ o[ks[i]] = o[ks[i]] || {}; o=o[ks[i]]; } o[ks.at(-1)] = val; }
+
+function makeField(def) {
+  const [path,label,type,extra] = def;
+  const wrap=document.createElement('div'); wrap.className='field';
+  const lab=document.createElement('label'); lab.textContent=label; wrap.appendChild(lab);
+  const id='f_'+path.replaceAll('.','_');
+  let el;
+  if (type==='switch') {
+    const row=document.createElement('div'); row.className='switch';
+    el=document.createElement('input'); el.type='checkbox'; el.id=id;
+    const span=document.createElement('span'); span.textContent='开启';
+    row.appendChild(el); row.appendChild(span); wrap.appendChild(row);
+  } else if (type==='select') {
+    el=document.createElement('select'); el.id=id;
+    for (const [v,t] of extra) { const o=document.createElement('option'); o.value=v; o.textContent=t; el.appendChild(o); }
+    wrap.appendChild(el);
+  } else if (type==='list') {
+    el=document.createElement('input'); el.type='text'; el.id=id;
+    wrap.appendChild(el);
+  } else if (type==='number') {
+    el=document.createElement('input'); el.type='number'; el.step='any'; el.id=id;
+    wrap.appendChild(el);
+  } else {
+    el=document.createElement('input'); el.type='text'; el.id=id;
+    wrap.appendChild(el);
+  }
+  if (typeof extra === 'string') { const h=document.createElement('div'); h.className='hint'; h.textContent=extra; wrap.appendChild(h); }
+  return wrap;
+}
+
+function renderSections() {
+  for (const [secId, defs] of Object.entries(SECTIONS)) {
+    const box=$(secId); if(!box) continue; box.innerHTML='';
+    for (const def of defs) box.appendChild(makeField(def));
+  }
+}
+
+function fillSections() {
+  for (const defs of Object.values(SECTIONS)) for (const [path] of defs) {
+    const el=$('f_'+path.replaceAll('.','_'));
+    if (!el) continue;
+    const val=getPath(settings,path);
+    if (el.type==='checkbox') el.checked=!!val;
+    else if (Array.isArray(val)) el.value=val.join(', ');
+    else el.value = val ?? '';
+  }
+}
+
+function collectSettings() {
+  const out={plugin:{},jm:{}};
+  for (const defs of Object.values(SECTIONS)) for (const [path,label,type] of defs) {
+    const el=$('f_'+path.replaceAll('.','_'));
+    if (!el) continue;
+    let v;
+    if (type==='switch') v=el.checked;
+    else if (type==='number') v=el.value===''?0:Number(el.value);
+    else if (type==='list') v=el.value.split(',').map(s=>s.trim()).filter(Boolean);
+    else v=el.value;
+    setPath(out,path,v);
+  }
+  return out;
+}
+
+function setStatus(el, text, tone) { el.textContent=text; el.className='status'+(tone?' '+tone:''); }
+
+function renderDomain(st) {
+  const rows=st.domain_rows||[];
+  const table=$('domain-table'), body=$('domain-body');
+  body.innerHTML='';
+  if (!rows.length) { table.style.display='none'; $('domain-summary').textContent=''; }
+  else {
+    let ok=0;
+    for (const r of rows) {
+      if (r.ok) ok++;
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${r.kind||''}</td><td>${r.domain||''}</td><td class="${r.ok?'ok':'bad'}">${r.ok?'✅ 可调用':'❌ 不可调用'}</td><td>${r.ms!=null?r.ms+' ms':'—'}</td><td>${r.detail||''}</td>`;
+      body.appendChild(tr);
+    }
+    table.style.display='';
+    $('domain-summary').textContent=`${ok}/${rows.length} 可调用`;
+  }
+  if (st.domains_status && st.domains_status.text) setStatus($('domains-status'), st.domains_status.text, st.domains_status.tone);
+  const sel=$('domain-select'); const cur=st.jm_domain||''; sel.innerHTML='';
+  for (const opt of (st.domain_options||['auto'])) { const o=document.createElement('option'); o.value=opt; o.textContent=opt==='auto'?'自动选择':opt; if ((cur||'auto')===opt||(cur===''&&opt==='auto')) o.selected=true; sel.appendChild(o); }
+  if (st.domain_checking) {
+    $('domain-summary').textContent='检测中…';
+    if (!pollTimer) pollTimer=setInterval(refreshStatus, 2000);
+  } else if (pollTimer) { clearInterval(pollTimer); pollTimer=null; }
+}
+
+function renderSessions() {
+  const sessions=settings?.sessions||{};
+  const body=$('sess-body'); body.innerHTML='';
+  const keys=Object.keys(sessions);
+  if (!keys.length) { body.innerHTML='<tr><td colspan="4" class="hint">暂无覆盖（全部继承全局）</td></tr>'; return; }
+  for (const k of keys) {
+    const s=sessions[k]||{};
+    const fmt=v=>v===true?'开':v===false?'关':'继承';
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${k}</td><td>${fmt(s.send_cover)}</td><td>${fmt(s.masking_enabled)}</td><td></td>`;
+    const btn=document.createElement('button'); btn.className='danger'; btn.textContent='删除'; btn.onclick=()=>delSession(k);
+    tr.lastElementChild.appendChild(btn); body.appendChild(tr);
+  }
+}
+
+async function refreshStatus() {
+  try { status=await maibot.query('status'); renderDomain(status); } catch(e){}
+}
+async function refreshSettings() {
+  try { settings=await maibot.query('settings'); fillSections(); renderSessions(); } catch(e){}
+}
+
+async function saveAll() {
+  const btn=$('btn-save-all'); btn.disabled=true; $('save-hint').textContent='保存中…';
+  try {
+    const data=collectSettings();
+    await maibot.action('save_settings',{payload:JSON.stringify(data)});
+    $('save-hint').textContent='已保存';
+    await refreshSettings();
+  } catch(e){ $('save-hint').textContent='保存失败：'+e.message; }
+  finally { btn.disabled=false; setTimeout(()=>{ $('save-hint').textContent=''; },3000); }
+}
+
+async function runCheck(alias, statusEl, btn) {
+  btn.disabled=true;
+  try { const res=await maibot.action(alias,{}); if(res?.text) setStatus(statusEl,res.text,res.tone); await refreshStatus(); }
+  catch(e){ setStatus(statusEl,'失败：'+e.message,'error'); }
+  finally { btn.disabled=false; }
+}
+
+async function saveDomain() {
+  const btn=$('btn-save-domain'); btn.disabled=true;
+  try { const res=await maibot.action('save_domain',{jm_domain:$('domain-select').value}); const el=$('save-domain-status'); el.style.display=''; setStatus(el,'已保存：'+(res.jm_domain||'自动选择'),'success'); await refreshStatus(); }
+  catch(e){ const el=$('save-domain-status'); el.style.display=''; setStatus(el,'保存失败：'+e.message,'error'); }
+  finally { btn.disabled=false; }
+}
+
+async function saveSession() {
+  const btn=$('btn-save-session'); btn.disabled=true;
+  try {
+    const payload={session:$('sess-id').value.trim(), send_cover:$('sess-cover').value, masking_enabled:$('sess-mask').value};
+    await maibot.action('save_session',{payload:JSON.stringify(payload)});
+    const el=$('sess-status'); el.style.display=''; setStatus(el,'已保存：'+payload.session,'success');
+    await refreshSettings();
+  } catch(e){ const el=$('sess-status'); el.style.display=''; setStatus(el,'保存失败：'+e.message,'error'); }
+  finally { btn.disabled=false; }
+}
+async function delSession(key) {
+  try { await maibot.action('delete_session',{payload:JSON.stringify({session:key})}); await refreshSettings(); } catch(e){}
+}
+
+await maibot.ready;
+renderSections();
+await refreshSettings();
+await refreshStatus();
+setInterval(()=>{ if(!pollTimer) refreshStatus().catch(()=>{}); }, 5000);
+
+$('btn-save-all').onclick=saveAll;
+$('btn-api').onclick=()=>runCheck('check_api',$('api-status'),$('btn-api'));
+$('btn-proxy').onclick=()=>runCheck('check_proxy',$('proxy-status'),$('btn-proxy'));
+$('btn-domains').onclick=()=>runCheck('check_domains',$('domains-status'),$('btn-domains'));
+$('btn-save-domain').onclick=saveDomain;
+$('btn-save-session').onclick=saveSession;
+</script>
+</body>
+</html>

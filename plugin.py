@@ -16,7 +16,7 @@ import re
 import time
 from typing import Any, ClassVar, Literal
 
-from maibot_sdk import Command, ConfigWidget, ConfigWidgetState, Field, HookHandler, MaiBotPlugin, PluginConfigBase
+from maibot_sdk import API, Command, ConfigWidgetState, Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
 
 SUPPORTED_CONFIG_VERSION = "1.0.0"
@@ -140,22 +140,18 @@ class RootConfig(PluginConfigBase):
 
 class JmLookupPlugin(MaiBotPlugin):
     config_model = RootConfig
-    config_widgets: ClassVar[list[ConfigWidget]] = [
-        ConfigWidget(id="check_api", kind="action", label="检测打码 API"),
-        ConfigWidget(id="api_status", kind="status", label="打码 API 状态"),
-        ConfigWidget(id="check_proxy", kind="action", label="测试代理（代理设置）"),
-        ConfigWidget(id="proxy_status", kind="status", label="代理状态"),
-        ConfigWidget(id="check_domains", kind="action", label="检测 jmcomic 分流"),
-        ConfigWidget(id="domains_status", kind="status", label="jmcomic 分流（延迟 / 访问）"),
-    ]
 
     def __init__(self) -> None:
         super().__init__()
         self._states: dict[str, ConfigWidgetState] = {
-            "api_status": ConfigWidgetState(text="未检测。点击「检测打码 API」。", tone="neutral"),
-            "proxy_status": ConfigWidgetState(text="未检测。点击「测试代理（代理设置）」。", tone="neutral"),
-            "domains_status": ConfigWidgetState(text="未检测。点击「检测 jmcomic 分流」。", tone="neutral"),
+            "api_status": ConfigWidgetState(text="未检测。", tone="neutral"),
+            "proxy_status": ConfigWidgetState(text="未检测。", tone="neutral"),
+            "domains_status": ConfigWidgetState(text="未检测。", tone="neutral"),
         }
+        self._domain_rows: list[dict[str, Any]] = []
+        self._callable_domains: list[str] = []
+        self._session_overrides: dict[str, dict[str, Any]] = {}
+        self._domain_task: asyncio.Task | None = None
         self._cache: dict[int, tuple[str, str] | None] = {}
         self._last: dict[str, float] = {}
         self._bg_tasks: set[asyncio.Task] = set()
@@ -165,6 +161,7 @@ class JmLookupPlugin(MaiBotPlugin):
 
     # ---------------------------------------------------------------- 生命周期
     async def on_load(self) -> None:
+        self._session_overrides = self._load_sessions()
         self.ctx.logger.info("禁漫号查询插件已加载")
 
     async def on_unload(self) -> None:
@@ -175,26 +172,99 @@ class JmLookupPlugin(MaiBotPlugin):
         if scope == "self":
             self.ctx.logger.info("禁漫号查询插件配置已更新: version=%s", version)
 
-    async def get_config_widget_state(self) -> dict[str, ConfigWidgetState]:
-        return {
-            "check_api": ConfigWidgetState(),
-            "api_status": self._states["api_status"],
-            "check_proxy": ConfigWidgetState(),
-            "proxy_status": self._states["proxy_status"],
-            "check_domains": ConfigWidgetState(),
-            "domains_status": self._states["domains_status"],
-        }
+    # ---------------------------------------------------------------- 会话级设置
+    def _message_key(self, message: dict[str, Any]) -> str:
+        gid = self._group_of(message)
+        if gid:
+            return str(gid)
+        info = message.get("message_info") or {}
+        ui = (info.get("user_info") if isinstance(info, dict) else None) or {}
+        if isinstance(ui, dict) and ui.get("user_id"):
+            return str(ui.get("user_id"))
+        return str(message.get("session_id") or "")
 
-    async def on_config_widget_action(self, action_id: str) -> None:
-        if action_id == "check_api":
-            self._states["api_status"] = await self._check_api()
-        elif action_id == "check_proxy":
-            self._states["proxy_status"] = await self._check_proxy()
-        elif action_id == "check_domains":
-            self._states["domains_status"] = await self._check_domains()
-        else:
-            raise ValueError(f"未知配置页操作: {action_id}")
-        self.ctx.logger.info("[jm] 配置页检测 %s 完成", action_id)
+    def _sessions_path(self):
+        from pathlib import Path  # noqa: PLC0415
+
+        try:
+            base = Path(str(self.ctx.paths.data_dir))
+        except Exception:
+            base = Path("/tmp")
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            base = Path("/tmp")
+        return base / "session_overrides.json"
+
+    def _load_sessions(self) -> dict[str, dict[str, Any]]:
+        import json  # noqa: PLC0415
+
+        try:
+            data = json.loads(self._sessions_path().read_text(encoding="utf-8"))
+            sessions = data.get("sessions")
+            return sessions if isinstance(sessions, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_sessions_file(self) -> None:
+        import json  # noqa: PLC0415
+
+        self._sessions_path().write_text(json.dumps({"sessions": self._session_overrides}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _eff_bool(self, key: str, session_key: str, default: bool) -> bool:
+        val = (self._session_overrides.get(str(session_key)) or {}).get(key)
+        return default if val is None else bool(val)
+
+    def _write_toml_sections(self, sections: dict[str, dict[str, Any]]) -> None:
+        """按 [section] 精确写回 config.toml（避免同名 key 串段）。"""
+        import re as _re  # noqa: PLC0415
+        import tomllib  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        path = Path(__file__).resolve().with_name("config.toml")
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            lines = []
+
+        def fmt(v: Any) -> str:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, (int, float)):
+                return str(v)
+            if isinstance(v, (list, tuple)):
+                return "[" + ", ".join(fmt(x) for x in v) + "]"
+            return '"' + str(v).replace('"', '\\"') + '"'
+
+        current = ""
+        remaining = {sec: dict(vals) for sec, vals in sections.items()}
+        out: list[str] = []
+        for line in lines:
+            m = _re.match(r"^\s*\[([^\]]+)\]\s*$", line)
+            if m:
+                current = m.group(1).strip()
+                out.append(line)
+                continue
+            km = _re.match(r"^(\s*)([A-Za-z0-9_]+)(\s*)=", line)
+            if km and current in remaining:
+                key = km.group(2)
+                if key in remaining[current]:
+                    out.append(f"{key} = {fmt(remaining[current].pop(key))}")
+                    continue
+            out.append(line)
+        for sec, vals in remaining.items():
+            if not vals:
+                continue
+            if not any(_re.match(r"^\s*\[" + _re.escape(sec) + r"\]\s*$", x) for x in out):
+                out.append(f"[{sec}]")
+            for k, v in vals.items():
+                out.append(f"{k} = {fmt(v)}")
+        text = "\n".join(out) + "\n"
+        path.write_text(text, encoding="utf-8")
+        try:
+            self.set_plugin_config(tomllib.loads(text))
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- 触发解析
     def _extract_ids(self, text: str, cfg: JmConfig) -> list[str]:
@@ -463,43 +533,56 @@ class JmLookupPlugin(MaiBotPlugin):
                                  tone="success" if ok else "warning")
 
     async def _check_domains(self) -> ConfigWidgetState:
-        """并发测试 jmcomic 全部 API + HTML 分流，逐个列延迟/访问情况。"""
+        """逐个分流做真实调用测试：API 分流用 jmcomic 拉专辑详情，HTML 分流测可达。"""
         cfg = self.config.jm
         proxy_url = str(getattr(cfg, "proxy_url", "") or "").strip()
         via_proxy = proxy_url if getattr(cfg, "proxy_enabled", False) and proxy_url else ""
         try:
+            import jmcomic  # noqa: PLC0415
             from jmcomic import JmModuleConfig  # noqa: PLC0415
 
             api_domains = list(getattr(JmModuleConfig, "DOMAIN_API_LIST", []) or [])
             updated = list(getattr(JmModuleConfig, "DOMAIN_API_UPDATED_LIST", None) or [])
             if updated:
                 api_domains = list(dict.fromkeys(api_domains + updated))
-            try:
-                html_domains = [d for d in (JmModuleConfig.get_html_domain_all() or []) if d and "t.me" not in d]
-            except Exception:
-                html_domains = []
+            JmModuleConfig.DEFAULT_PROXIES = jmcomic.ProxyBuilder.build_by_str(via_proxy) if via_proxy else {}
         except Exception as exc:
             return ConfigWidgetState(text=f"jmcomic 分流检测失败：{type(exc).__name__}: {exc}", tone="error")
-        targets = [("API", d) for d in api_domains] + [("HTML", d) for d in html_domains]
-        probes = []
-        for kind, d in targets:
-            url = d if str(d).startswith("http") else f"https://{d}/"
-            probes.append(self._probe_url(url, 4.0, via_proxy))
-        results = await asyncio.gather(*probes, return_exceptions=True)
-        rows: list[tuple[str, str, Any, Any, Any]] = []
-        for (kind, d), res in zip(targets, results):
-            if isinstance(res, tuple):
-                rows.append((kind, d, res[0], res[1], res[2]))
+
+        probe_album = 1448594
+
+        def _api_call(domain: str) -> str:
+            option = jmcomic.JmOption.default()
+            option.client["domain"] = [domain]
+            option.client["retry_times"] = 1
+            client = option.new_jm_client()
+            album = client.get_album_detail(probe_album)
+            name = str(getattr(album, "name", "") or "").strip()
+            if not name:
+                raise RuntimeError("empty album name")
+            return name
+
+        async def _one_api(domain: str) -> dict[str, Any]:
+            t0 = time.monotonic()
+            try:
+                name = await asyncio.wait_for(asyncio.to_thread(_api_call, domain), timeout=8.0)
+                return {"kind": "API", "domain": domain, "ok": True, "status": "可调用",
+                        "ms": int((time.monotonic() - t0) * 1000), "detail": name[:24]}
+            except Exception as exc:
+                return {"kind": "API", "domain": domain, "ok": False, "status": "不可调用",
+                        "ms": int((time.monotonic() - t0) * 1000), "detail": type(exc).__name__}
+
+        results = await asyncio.gather(*[_one_api(d) for d in api_domains])
+        self._domain_rows = list(results)
+        self._callable_domains = [r["domain"] for r in results if r.get("ok")]
+        ok_n = sum(1 for r in results if r.get("ok"))
+        lines = [f"jmcomic 分流：{ok_n}/{len(results)} 可调用"]
+        for r in results:
+            if r.get("ok"):
+                lines.append(f"  ✅ [{r['kind']}] {r['domain']}  {r['status']}  {r['ms']}ms  {r['detail']}")
             else:
-                rows.append((kind, d, None, None, type(res).__name__))
-        ok_n = sum(1 for _, _, code, _, _ in rows if isinstance(code, int) and code < 500)
-        lines = [f"jmcomic 分流：{ok_n}/{len(rows)} 可用"]
-        for kind, d, code, ms, err in rows:
-            if isinstance(code, int) and code < 500:
-                lines.append(f"  ✅ [{kind}] {d}  HTTP {code}  {ms}ms")
-            else:
-                lines.append(f"  ❌ [{kind}] {d}  {'超时/失败' if code is None else 'HTTP ' + str(code)}")
-        tone = "error" if ok_n == 0 else ("warning" if ok_n < len(rows) else "success")
+                lines.append(f"  ❌ [{r['kind']}] {r['domain']}  {r['status']}  {r['detail']}")
+        tone = "error" if ok_n == 0 else ("warning" if ok_n < len(results) else "success")
         return ConfigWidgetState(text="\n".join(lines)[:1999], tone=tone)
 
     async def _run_checks(self) -> ConfigWidgetState:
@@ -621,6 +704,190 @@ class JmLookupPlugin(MaiBotPlugin):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
         return {}
+
+
+    # ---------------------------------------------------------------- WebUI 页面 API
+    def _domain_options(self) -> list[str]:
+        """只列 API 分流域名（插件实际使用）；如有检测结果，只保留可调用的。"""
+        opts: list[str] = ["auto"]
+        candidates: list[str] = []
+        try:
+            from jmcomic import JmModuleConfig  # noqa: PLC0415
+
+            candidates = list(getattr(JmModuleConfig, "DOMAIN_API_LIST", []) or [])
+            updated = list(getattr(JmModuleConfig, "DOMAIN_API_UPDATED_LIST", None) or [])
+            if updated:
+                candidates = list(dict.fromkeys(candidates + updated))
+        except Exception:
+            candidates = []
+        callable_domains = getattr(self, "_callable_domains", [])
+        if callable_domains:
+            candidates = [d for d in candidates if d in callable_domains] or list(callable_domains)
+        for d in candidates:
+            d = str(d).strip()
+            if d and d not in opts:
+                opts.append(d)
+        return opts
+
+    def _write_config_values(self, values: dict[str, Any]) -> None:
+        """把少量配置写回插件目录 config.toml，并同步内存配置实例。"""
+        import re as _re  # noqa: PLC0415
+        import tomllib  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        path = Path(__file__).resolve().with_name("config.toml")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+        for key, val in values.items():
+            if isinstance(val, bool):
+                raw = "true" if val else "false"
+            elif isinstance(val, (int, float)):
+                raw = str(val)
+            else:
+                raw = '"' + str(val).replace('"', '\"') + '"'
+            pattern = rf"(?m)^{_re.escape(key)}\s*=.*$"
+            line = f"{key} = {raw}"
+            if _re.search(pattern, text):
+                text = _re.sub(pattern, line, text, count=1)
+            else:
+                if text and not text.endswith("\n"):
+                    text += "\n"
+                text += line + "\n"
+        path.write_text(text, encoding="utf-8")
+        try:
+            self.set_plugin_config(tomllib.loads(text))
+        except Exception:
+            pass
+
+    @API("webui_status", description="WebUI：当前设置与检测状态", version="1", public=False)
+    async def api_webui_status(self):
+        cfg = self.config.jm
+        return {
+            "api_url": str(cfg.ahm_api_url or ""),
+            "proxy_enabled": bool(getattr(cfg, "proxy_enabled", False)),
+            "proxy_url": str(getattr(cfg, "proxy_url", "") or ""),
+            "jm_domain": str(getattr(cfg, "jm_domain", "") or ""),
+            "api_status": self._states["api_status"].model_dump(),
+            "proxy_status": self._states["proxy_status"].model_dump(),
+            "domains_status": self._states["domains_status"].model_dump(),
+            "domain_rows": self._domain_rows,
+            "domain_options": self._domain_options(),
+            "domain_checking": bool(self._domain_task and not self._domain_task.done()),
+            "sessions": self._session_overrides,
+        }
+
+    @API("webui_check_api", description="WebUI：检测打码 API", version="1", public=False)
+    async def api_webui_check_api(self):
+        st = await self._check_api()
+        self._states["api_status"] = st
+        return {"text": st.text, "tone": st.tone}
+
+    @API("webui_check_proxy", description="WebUI：测试代理", version="1", public=False)
+    async def api_webui_check_proxy(self):
+        st = await self._check_proxy()
+        self._states["proxy_status"] = st
+        return {"text": st.text, "tone": st.tone}
+
+    @API("webui_check_domains", description="WebUI：后台检测 jmcomic 分流", version="1", public=False)
+    async def api_webui_check_domains(self):
+        if self._domain_task and not self._domain_task.done():
+            return {"text": "检测进行中…", "tone": "neutral", "pending": True}
+
+        async def _bg():
+            try:
+                self._states["domains_status"] = await self._check_domains()
+            except Exception as exc:
+                self._states["domains_status"] = ConfigWidgetState(text=f"检测失败：{type(exc).__name__}: {exc}", tone="error")
+
+        self._domain_task = asyncio.create_task(_bg())
+        return {"text": "检测已开始（约 5–15 秒），结果会自动刷新…", "tone": "neutral", "pending": True}
+
+    @API("webui_settings", description="WebUI：读取全部设置", version="1", public=False)
+    async def api_webui_settings(self):
+        data = self._plugin_config_data or {}
+        tpl = self.config.plugin
+        jm = self.config.jm.model_dump()
+        return {
+            "plugin": {"enabled": bool(tpl.enabled)},
+            "jm": jm,
+            "sessions": self._session_overrides,
+        }
+
+    @API("webui_save_settings", description="WebUI：保存全部设置", version="1", public=False)
+    async def api_webui_save_settings(self, payload: str = ""):
+        import json  # noqa: PLC0415
+
+        try:
+            data = json.loads(payload or "{}")
+        except Exception as exc:
+            raise ValueError(f"参数格式错误: {exc}")
+        if not isinstance(data, dict):
+            raise ValueError("payload 必须是对象")
+        jm_in = data.get("jm") or {}
+        plugin_in = data.get("plugin") or {}
+        allowed = set(JmConfig.model_fields.keys())
+        values = {k: v for k, v in jm_in.items() if k in allowed and k != "config_version"}
+        if values:
+            try:
+                JmConfig(**{**self.config.jm.model_dump(), **values})
+            except Exception as exc:
+                raise ValueError(f"配置校验失败: {exc}")
+        sections = {}
+        if values:
+            sections["jm"] = values
+        if "enabled" in plugin_in:
+            sections["plugin"] = {"enabled": bool(plugin_in["enabled"])}
+        if sections:
+            self._write_toml_sections(sections)
+        return {"saved": True, "jm": values}
+
+    @API("webui_save_session", description="WebUI：保存分群/私聊覆盖", version="1", public=False)
+    async def api_webui_save_session(self, payload: str = ""):
+        import json  # noqa: PLC0415
+
+        try:
+            data = json.loads(payload or "{}")
+        except Exception as exc:
+            raise ValueError(f"参数格式错误: {exc}")
+        key = str(data.get("session") or "").strip()
+        if not key:
+            raise ValueError("请填写群号或私聊会话ID")
+        entry: dict[str, Any] = {}
+        for field in ("send_cover", "masking_enabled"):
+            val = data.get(field)
+            if val is None or val == "inherit":
+                continue
+            entry[field] = bool(val)
+        if entry:
+            self._session_overrides[key] = entry
+        else:
+            self._session_overrides.pop(key, None)
+        self._save_sessions_file()
+        return {"session": key, "entry": entry, "sessions": self._session_overrides}
+
+    @API("webui_delete_session", description="WebUI：删除分群/私聊覆盖", version="1", public=False)
+    async def api_webui_delete_session(self, payload: str = ""):
+        import json  # noqa: PLC0415
+
+        try:
+            data = json.loads(payload or "{}")
+        except Exception as exc:
+            raise ValueError(f"参数格式错误: {exc}")
+        key = str(data.get("session") or "").strip()
+        self._session_overrides.pop(key, None)
+        self._save_sessions_file()
+        return {"session": key, "sessions": self._session_overrides}
+
+    @API("webui_save_domain", description="WebUI：保存指定分流", version="1", public=False)
+    async def api_webui_save_domain(self, jm_domain: str = ""):
+        val = str(jm_domain or "").strip()
+        if val and val != "auto" and val not in self._domain_options():
+            raise ValueError(f"未知分流: {val}")
+        saved = "" if val in ("", "auto") else val
+        self._write_config_values({"jm_domain": saved})
+        return {"jm_domain": saved}
 
 
 def create_plugin() -> JmLookupPlugin:
