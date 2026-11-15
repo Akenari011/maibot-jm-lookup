@@ -1,4 +1,4 @@
-"""麦麦看本（禁漫号查询插件）。
+"""麦麦看本。
 
 群里出现「禁漫本子号」（JM123 / 禁漫123 / JM123456 或纯数字）时，
 自动抓取该本子的标题和作者并回帖；回帖可引用原消息、可打包成聊天记录、结果可注入上下文。
@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
-from maibot_sdk import Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase
+from maibot_sdk import Command, ConfigWidget, ConfigWidgetState, Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
 
 SUPPORTED_CONFIG_VERSION = "1.0.0"
@@ -122,6 +122,12 @@ class JmConfig(PluginConfigBase):
     min_boxes: int = Field(
         default=1, description="兜底最少框数",
         json_schema_extra={"label": "兜底最少框数", "hint": "检出框数少于它视为「过少」→ 触发兜底。默认 1 = 一个部位都没检出才兜底。", "order": 22})
+    proxy_enabled: bool = Field(
+        default=False, description="允许使用代理服务",
+        json_schema_extra={"label": "允许使用代理服务", "hint": "开启后，jmcomic 抓取（查询/下载封面）走下方代理；打码 API 是本地直连，不受影响。", "order": 23})
+    proxy_url: str = Field(
+        default="", description="代理地址",
+        json_schema_extra={"label": "代理地址", "hint": "如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890；仅「允许使用代理服务」开启时生效。", "order": 24})
 
 
 class RootConfig(PluginConfigBase):
@@ -131,9 +137,13 @@ class RootConfig(PluginConfigBase):
 
 class JmLookupPlugin(MaiBotPlugin):
     config_model = RootConfig
+    config_widgets: ClassVar[list[ConfigWidget]] = [
+        ConfigWidget(id="check_services", kind="action", label="检测 API / 代理 / 分流"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
+        self._check_state = ConfigWidgetState(text="未检测。点击「检测 API / 代理 / 分流」开始。", tone="neutral")
         self._cache: dict[int, tuple[str, str] | None] = {}
         self._last: dict[str, float] = {}
         self._bg_tasks: set[asyncio.Task] = set()
@@ -152,6 +162,14 @@ class JmLookupPlugin(MaiBotPlugin):
     async def on_config_update(self, scope: str, config_data: dict, version: str) -> None:
         if scope == "self":
             self.ctx.logger.info("禁漫号查询插件配置已更新: version=%s", version)
+
+    async def get_config_widget_state(self) -> dict[str, ConfigWidgetState]:
+        return {"check_services": self._check_state}
+
+    async def on_config_widget_action(self, action_id: str) -> None:
+        if action_id == "check_services":
+            self._check_state = await self._run_checks()
+            self.ctx.logger.info("[jm] 检测完成: %s", self._check_state.text.replace("\n", " | "))
 
     # ---------------------------------------------------------------- 触发解析
     def _extract_ids(self, text: str, cfg: JmConfig) -> list[str]:
@@ -172,7 +190,16 @@ class JmLookupPlugin(MaiBotPlugin):
         async with self._client_lock:
             if self._client is None:
                 def _mk():
-                    return _load_jmcomic().JmOption.default().new_jm_client()
+                    jm = _load_jmcomic()
+                    cfg = self.config.jm
+                    try:
+                        if getattr(cfg, "proxy_enabled", False) and str(getattr(cfg, "proxy_url", "")).strip():
+                            jm.JmModuleConfig.DEFAULT_PROXIES = jm.ProxyBuilder.build_by_str(str(cfg.proxy_url).strip())
+                        else:
+                            jm.JmModuleConfig.DEFAULT_PROXIES = {}
+                    except Exception:
+                        pass
+                    return jm.JmOption.default().new_jm_client()
                 self._client = await asyncio.to_thread(_mk)
         return self._client
 
@@ -362,6 +389,96 @@ class JmLookupPlugin(MaiBotPlugin):
             return None
         return b64  # 成功=base64；失败=None（不发封面，仅标题）
 
+    # ---------------------------------------------------------------- 检测（按钮 / 命令共用）
+    async def _run_checks(self) -> ConfigWidgetState:
+        """检测：打码 API / 代理 / jmcomic 全部分流（从本机发起）。"""
+        cfg = self.config.jm
+        lines: list[str] = []
+        tone = "success"
+
+        import httpx  # noqa: PLC0415
+
+        # 1) 打码 API
+        api_url = str(cfg.ahm_api_url or "").strip()
+        docs_url = api_url.replace("/process/", "/docs") if "/process/" in api_url else api_url.rstrip("/") + "/docs"
+        try:
+            t0 = time.monotonic()
+            async with httpx.AsyncClient(timeout=5.0) as cli:
+                r = await cli.get(docs_url)
+            ms = int((time.monotonic() - t0) * 1000)
+            ok = r.status_code < 500
+            lines.append(f"打码 API：{'✅ 可用' if ok else '❌ 异常'} {r.status_code} ({ms}ms)")
+            if not ok:
+                tone = "warning"
+        except Exception as exc:
+            lines.append(f"打码 API：❌ 不可达（{type(exc).__name__}）")
+            tone = "warning"
+
+        # 2) 代理
+        proxy_url = str(getattr(cfg, "proxy_url", "") or "").strip()
+        use_proxy = bool(getattr(cfg, "proxy_enabled", False)) and bool(proxy_url)
+        if getattr(cfg, "proxy_enabled", False) and not proxy_url:
+            lines.append("代理：⚠️ 已开启但未填地址")
+            tone = "warning"
+        elif use_proxy:
+            try:
+                t0 = time.monotonic()
+                async with httpx.AsyncClient(proxy=proxy_url, timeout=8.0) as cli:
+                    r = await cli.get("https://www.gstatic.com/generate_204")
+                ms = int((time.monotonic() - t0) * 1000)
+                ok = r.status_code in (200, 204)
+                lines.append(f"代理：{'✅ 可用' if ok else '❌ 异常'} {r.status_code} ({ms}ms)")
+                if not ok:
+                    tone = "warning"
+            except Exception as exc:
+                lines.append(f"代理：❌ 不可用（{type(exc).__name__}）")
+                tone = "warning"
+        else:
+            lines.append("代理：未启用（直连）")
+
+        # 3) jmcomic 全部分流批量测试
+        try:
+            from jmcomic import JmModuleConfig  # noqa: PLC0415
+
+            api_domains = list(getattr(JmModuleConfig, "DOMAIN_API_LIST", []) or [])
+            updated = list(getattr(JmModuleConfig, "DOMAIN_API_UPDATED_LIST", None) or [])
+            if updated:
+                api_domains = list(dict.fromkeys(api_domains + updated))
+            try:
+                html_domains = [d for d in (JmModuleConfig.get_html_domain_all() or []) if d and "t.me" not in d]
+            except Exception:
+                html_domains = []
+            targets = [("API", d) for d in api_domains] + [("HTML", d) for d in html_domains]
+            results: list[tuple[str, str, Any, Any]] = []
+            kw: dict[str, Any] = {"timeout": 6.0, "follow_redirects": True}
+            if use_proxy:
+                kw["proxy"] = proxy_url
+            async with httpx.AsyncClient(**kw) as cli:
+                for kind, d in targets:
+                    url = d if str(d).startswith("http") else f"https://{d}/"
+                    t0 = time.monotonic()
+                    try:
+                        r = await cli.get(url)
+                        results.append((kind, d, r.status_code, int((time.monotonic() - t0) * 1000)))
+                    except Exception:
+                        results.append((kind, d, None, None))
+            ok_n = sum(1 for _, _, st, _ in results if isinstance(st, int) and st < 500)
+            lines.append(f"jmcomic 分流：{ok_n}/{len(results)} 可用")
+            for kind, d, st, ms in results:
+                if isinstance(st, int) and st < 500:
+                    lines.append(f"  ✅ [{kind}] {d} {st} {ms}ms")
+                else:
+                    lines.append(f"  ❌ [{kind}] {d} {'超时/失败' if st is None else st}")
+            if ok_n == 0:
+                tone = "error"
+            elif ok_n < len(results):
+                tone = "warning"
+        except Exception as exc:
+            lines.append(f"jmcomic 分流检测失败：{type(exc).__name__}: {exc}")
+            tone = "warning"
+
+        return ConfigWidgetState(text="\n".join(lines)[:1999], tone=tone)
+
     # ---------------------------------------------------------------- 命令/监听
     @staticmethod
     def _current_text(message: dict[str, Any]) -> str:
@@ -400,6 +517,17 @@ class JmLookupPlugin(MaiBotPlugin):
             ctx["sender_nickname"] = str(ui.get("user_nickname") or ui.get("nickname") or "")
             ctx["sender_cardname"] = str(ui.get("user_cardname") or ui.get("cardname") or "")
         return ctx
+
+    @Command("jmcheck", pattern=r"^/jmcheck$")
+    async def handle_jmcheck(self, **kwargs):
+        stream_id = str(kwargs.get("stream_id") or "").strip()
+        st = await self._run_checks()
+        if stream_id:
+            try:
+                await self.ctx.send.text(st.text, stream_id)
+            except Exception:
+                pass
+        return True, st.text, 1
 
     @Command("jm", pattern=r"^/(?:jm|查本子|禁漫)\s+(?P<id>\d{2,8})$")
     async def handle_jm_command(self, **kwargs):
