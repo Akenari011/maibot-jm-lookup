@@ -44,5 +44,12 @@
     "send.image",
     "send.hybrid",
     "send.forward"
-  ]
+  ],
+  "display": {
+    "icon": {
+      "type": "local",
+      "value": "assets/icon.jpg",
+      "fallback": "image"
+    }
+  }
 }
