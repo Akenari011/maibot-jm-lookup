@@ -1,0 +1,48 @@
+{
+  "manifest_version": 2,
+  "id": "github.akenari011.jm-lookup",
+  "version": "1.0.0",
+  "name": "禁漫号查询",
+  "description": "群里出现禁漫天堂本子号时，自动抓取标题和作者并回复。支持前缀/纯数字触发、自定义前缀、冷却、无结果策略、引用/合并转发、封面本地打码与漏检兜底。",
+  "author": {
+    "name": "Akenari011",
+    "url": "https://github.com/Akenari011"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/Akenari011/maibot-jm-lookup",
+    "homepage": "https://github.com/Akenari011/maibot-jm-lookup",
+    "issues": "https://github.com/Akenari011/maibot-jm-lookup/issues"
+  },
+  "host_application": {
+    "min_version": "1.4.0",
+    "max_version": "1.4.99"
+  },
+  "sdk": {
+    "min_version": "2.16.0",
+    "max_version": "2.23.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "jmcomic",
+      "version_spec": ">=2.7.0"
+    },
+    {
+      "type": "python_package",
+      "name": "httpx",
+      "version_spec": ">=0.20"
+    }
+  ],
+  "changelog": "CHANGELOG.md",
+  "plugin_type": "extension",
+  "i18n": {
+    "default_locale": "zh-CN"
+  },
+  "capabilities": [
+    "send.text",
+    "send.image",
+    "send.hybrid",
+    "send.forward"
+  ]
+}

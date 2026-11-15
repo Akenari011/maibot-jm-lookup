@@ -1,0 +1,20 @@
+# 运行时配置（由 Runner 生成，不提交）
+/config.toml
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 测试/备份
+config_back/
+*.bak
+*.backup*
+
+# 虚拟环境
+.venv/
+venv/
+
+# 系统
+.DS_Store
+Thumbs.db
