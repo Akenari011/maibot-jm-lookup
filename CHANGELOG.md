@@ -10,4 +10,5 @@
 - `manifest` 声明 `python_package` 依赖（jmcomic / httpx），宿主可自动准备
 - 插件显示名：麦麦看本；插件头像 icon
 - 允许使用代理服务（支持 http/socks5），仅作用于 jmcomic 抓取
-- 配置页「检测 API / 代理 / 分流」按钮 + `/jmcheck` 命令：批量测试 jmcomic 全部分流（API+HTML）本机可用性/延迟
+- 配置页三个独立检测按钮：检测打码 API / 测试代理（代理设置）/ 检测 jmcomic 分流（逐个列 HTTP 状态+延迟）；`/jmcheck` 命令
+- 新增「指定分流（留空=自动）」配置，可选用检测出的最快分流
