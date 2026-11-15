@@ -131,6 +131,15 @@ class JmConfig(PluginConfigBase):
     jm_domain: str = Field(
         default="", description="指定 jmcomic 分流（留空=自动）",
         json_schema_extra={"label": "指定分流（留空=自动）", "hint": "填 API 分流域名（如 www.cdngwc.cc）。可先用页面下方「检测 jmcomic 分流」看各分流延迟/访问，再选最快的填这里；留空=自动。", "order": 25})
+    allow_private: bool = Field(
+        default=True, description="允许私聊使用",
+        json_schema_extra={"label": "允许私聊使用", "hint": "开：私聊也可以触发查询；关：只允许群聊，私聊不响应。", "order": 26})
+    private_send_cover: Literal["inherit", "on", "off"] = Field(
+        default="inherit", description="私聊是否发图",
+        json_schema_extra={"label": "私聊发图", "hint": "inherit=跟随「发送封面」；on=私聊总是发封面；off=私聊不发封面（只发标题）。", "order": 27})
+    private_masking_enabled: Literal["inherit", "on", "off"] = Field(
+        default="inherit", description="私聊是否打码",
+        json_schema_extra={"label": "私聊打码", "hint": "inherit=跟随「启用打码服务」；on=私聊封面必打码；off=私聊不打码（也不发封面）。", "order": 28})
 
 
 class RootConfig(PluginConfigBase):
@@ -214,6 +223,26 @@ class JmLookupPlugin(MaiBotPlugin):
     def _eff_bool(self, key: str, session_key: str, default: bool) -> bool:
         val = (self._session_overrides.get(str(session_key)) or {}).get(key)
         return default if val is None else bool(val)
+
+    @staticmethod
+    def _tri_state(value: Any, default: bool) -> bool:
+        if value == "on":
+            return True
+        if value == "off":
+            return False
+        return default
+
+    def _effective_send_cover(self, cfg: JmConfig, session_key: str, is_private: bool) -> bool:
+        val = bool(cfg.send_cover)
+        if is_private:
+            val = self._tri_state(getattr(cfg, "private_send_cover", "inherit"), val)
+        return self._eff_bool("send_cover", session_key, val)
+
+    def _effective_masking(self, cfg: JmConfig, session_key: str, is_private: bool) -> bool:
+        val = bool(cfg.masking_enabled)
+        if is_private:
+            val = self._tri_state(getattr(cfg, "private_masking_enabled", "inherit"), val)
+        return self._eff_bool("masking_enabled", session_key, val)
 
     def _write_toml_sections(self, sections: dict[str, dict[str, Any]]) -> None:
         """按 [section] 精确写回 config.toml（避免同名 key 串段）。"""
@@ -616,12 +645,14 @@ class JmLookupPlugin(MaiBotPlugin):
         return str(message.get("group_id") or "")
 
     def _group_allowed(self, cfg: JmConfig, message: dict[str, Any]) -> bool:
+        gid = self._group_of(message)
+        if not gid:
+            return bool(getattr(cfg, "allow_private", True))
         groups = [str(g).strip() for g in (cfg.allowed_groups or []) if str(g).strip()]
         if not groups:
             return True
-        gid = self._group_of(message)
         sid = str(message.get("session_id") or "")
-        return (bool(gid) and gid in groups) or (bool(sid) and sid in groups)
+        return gid in groups or (bool(sid) and sid in groups)
 
     @staticmethod
     def _reply_ctx_from_message(message: dict[str, Any]) -> dict[str, Any]:

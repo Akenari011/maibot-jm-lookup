@@ -98,6 +98,7 @@ const SECTIONS = {
     ['plugin.enabled','启用插件','switch'],
     ['jm.enabled','启用查询','switch'],
     ['jm.allowed_groups','启用群（留空=全部）','list','群号/会话ID，逗号分隔；留空=所有群'],
+    ['jm.allow_private','允许私聊使用','switch'],
     ['jm.trigger_mode','触发模式','select',[['prefix','prefix（前缀+数字）'],['any','any（纯数字）']]],
     ['jm.prefixes','触发前缀','list','逗号分隔，仅 prefix 模式'],
     ['jm.min_digits','最少位数','number'],
@@ -113,12 +114,14 @@ const SECTIONS = {
   ],
   'sec-send': [
     ['jm.send_cover','发送封面','switch'],
+    ['jm.private_send_cover','私聊发图','select',[['inherit','跟随全局'],['on','开'],['off','关']]],
     ['jm.bundle_forward','打包成聊天记录（关=分开发）','switch'],
     ['jm.quote_original','引用原消息','switch'],
     ['jm.inject_context','注入上下文','switch'],
   ],
   'sec-mask': [
     ['jm.masking_enabled','启用打码服务','switch'],
+    ['jm.private_masking_enabled','私聊打码','select',[['inherit','跟随全局'],['on','开'],['off','关']]],
     ['jm.mosaic_style','打码样式','select',[['mosaic','mosaic 马赛克'],['blur','blur 模糊']]],
     ['jm.ahm_api_url','打码 API 地址','text'],
     ['jm.fallback_enabled','启用漏检兜底','switch'],
