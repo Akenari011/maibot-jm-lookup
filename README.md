@@ -173,3 +173,25 @@ plugins/jm_lookup/
 ├── config.toml      # 运行配置（WebUI 可改）
 └── README.md        # 本文件
 ```
+
+---
+
+## 十、许可证 / License
+
+本项目（本插件的全部代码与文档）采用 **MIT License** 发布。
+
+Copyright (c) 2026 Akenari011
+
+完整条款见仓库根目录 [LICENSE](LICENSE)。
+
+## 十一、第三方依赖与授权说明
+
+本插件仓库**不包含**任何第三方源代码、模型权重或图片素材；仅通过依赖或 HTTP 接口使用以下第三方项目：
+
+| 项目 | 许可证 | 说明 |
+|---|---|---|
+| [jmcomic](https://github.com/hect0x7/JMComic-Crawler-Python) | MIT | 作为 Python 依赖调用，抓取本子标题/作者；未打包其代码。 |
+| [httpx](https://github.com/encode/httpx) | BSD-3-Clause | HTTP 客户端依赖。 |
+| [AutoHajimiMosaic](https://github.com/frinkleko/AutoHajimiMosaic) | **GPL-3.0** | 可选的封面打码服务（独立进程，非本仓库内容）。本仓库**不分发**其代码与模型权重，仅通过 HTTP 调用用户自行部署的实例；如需部署/分发该服务或其模型，请遵守 GPL-3.0。 |
+
+> 打码模型（segmentation_model / classification_model）版权归 AutoHajimiMosaic 原作者，遵循 **GPL-3.0**，不在本 MIT 仓库内分发。
