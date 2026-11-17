@@ -1,0 +1,74 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[jm]
+enabled = true
+allowed_groups = []
+trigger_mode = "prefix"
+prefixes = ["JM", "jm", "禁漫", "本子"]
+min_digits = 4
+max_digits = 8
+cooldown_seconds = 60
+request_timeout = 20
+proxy_enabled = false
+proxy_url = ""
+jm_domain = ""
+allow_private = true
+private_send_cover = "inherit"
+private_masking_enabled = "inherit"
+send_author = true
+reply_template = "《{title}》 作者：{author}"
+on_not_found = "silent"
+not_found_text = "没搜到这个本子"
+send_cover = true
+bundle_forward = true
+quote_original = true
+inject_context = true
+masking_enabled = true
+sfw_cover_mask = false
+mosaic_style = "mosaic"
+ahm_api_url = "http://127.0.0.1:8000/process/"
+fallback_enabled = true
+fallback = "mosaic"
+fallback_cover_ratio = 0
+min_boxes = 1
+
+# ---------------------------------------------------------------- 今日推荐
+daily_enabled = false
+daily_time = "09:00"
+daily_targets = []
+daily_count = 1
+daily_cover = true
+daily_forward = true
+
+# ---------------------------------------------------------------- 文本
+t2s_enabled = true
+
+# ---------------------------------------------------------------- R18 渠道门禁
+adult_declared = false
+adult_enabled = false
+adult_private = "inherit"
+
+# ---------------------------------------------------------------- 全年龄渠道
+copymanga_enabled = true
+copymanga_domain = ""
+copymanga_token = ""
+gmanga_enabled = true
+gmanga_domain = ""
+
+# ---------------------------------------------------------------- 多渠道
+nhentai_enabled = true
+eh_enabled = true
+eh_site = "e"
+eh_cookie_member = ""
+eh_cookie_pass = ""
+
+# ---------------------------------------------------------------- 内容过滤
+# 开启后搜索类命令只返回全年龄内容（nhentai 加 tag:non-h，E-Hentai 加 other:non-h）
+sfw_only = false
+
+# ---------------------------------------------------------------- 搜索
+search_enabled = true
+tag_search_enabled = true
+search_max_results = 5

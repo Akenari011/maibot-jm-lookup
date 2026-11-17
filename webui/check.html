@@ -3,19 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>麦麦看本 · 设置</title>
+<title>麦麦漫画 · 设置</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  body { margin:0; padding:20px 24px 48px; background:var(--maibot-background,#f7f7f8); color:var(--maibot-foreground,#1f2328); font-family:var(--maibot-font-body,system-ui,-apple-system,"Segoe UI",sans-serif); line-height:1.6; }
-  .wrap { max-width: 980px; margin:0 auto; }
+  body { margin:0; padding:20px clamp(16px, 3vw, 40px) 48px; background:var(--maibot-background,#f7f7f8); color:var(--maibot-foreground,#1f2328); font-family:var(--maibot-font-body,system-ui,-apple-system,"Segoe UI",sans-serif); line-height:1.6; }
+  .wrap { max-width: 1560px; margin:0 auto; }
   h1 { font-size:20px; margin:0 0 4px; }
   .sub { color:var(--maibot-muted,#6b7280); font-size:13px; margin-bottom:16px; }
   .card { background:var(--maibot-surface,#fff); border:1px solid var(--maibot-border,#e5e7eb); border-radius:12px; padding:16px 18px; margin-bottom:14px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
   .card h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
   .card h2 .dot { width:8px; height:8px; border-radius:50%; background:var(--maibot-primary,#f97316); }
-  .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px 18px; }
-  @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap:14px 22px; }
   .field { display:flex; flex-direction:column; gap:4px; }
   .field label { font-size:13px; font-weight:500; }
   .field .hint { font-size:12px; color:var(--maibot-muted,#9ca3af); }
@@ -42,51 +41,120 @@
   td.ok { color:#15803d; } td.bad { color:#b91c1c; }
   .savebar { position:sticky; bottom:12px; display:flex; justify-content:flex-end; gap:10px; padding:10px 14px; background:color-mix(in srgb, var(--maibot-surface,#fff) 88%, transparent); border:1px solid var(--maibot-border,#e5e7eb); border-radius:12px; backdrop-filter:blur(6px); }
   .footer { color:var(--maibot-muted,#9ca3af); font-size:12px; margin-top:18px; text-align:center; }
+  details.group { background:var(--maibot-surface,#fff); border:1px solid var(--maibot-border,#e5e7eb); border-radius:12px; margin-bottom:14px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  details.group > summary { padding:14px 18px; cursor:pointer; font-size:15px; font-weight:600; display:flex; align-items:center; gap:9px; list-style:none; user-select:none; }
+  details.group > summary::-webkit-details-marker { display:none; }
+  details.group > summary::before { content:'\25B8'; color:var(--maibot-muted,#9ca3af); font-size:12px; transition:transform .15s; }
+  details.group[open] > summary::before { transform:rotate(90deg); }
+  details.group > summary .tag { font-size:11px; font-weight:500; color:var(--maibot-muted,#6b7280); background:var(--maibot-soft,#f3f4f6); border-radius:999px; padding:1px 8px; }
+  details.group > .body { padding:0 18px 18px; }
+  details.group > .body > .grid:not(:last-child) { margin-bottom:16px; }
+  .subhead { font-size:12px; font-weight:600; color:var(--maibot-muted,#6b7280); margin:14px 0 8px; letter-spacing:.02em; }
+  .subhead:first-child { margin-top:0; }
+  .summary-bar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+  .chip { font-size:12px; padding:4px 11px; border-radius:999px; border:1px solid var(--maibot-border,#e5e7eb); background:var(--maibot-surface,#fff); }
+  .chip.on { color:#15803d; border-color:#86efac; background:#f0fdf4; }
+  .chip.off { color:var(--maibot-muted,#9ca3af); }
+  .chip.warn { color:#b45309; border-color:#fcd34d; background:#fffbeb; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>麦麦看本 · 设置</h1>
+  <h1>麦麦漫画 · 设置</h1>
   <div class="sub">全部设置都在这里；分群 / 私聊可单独覆盖「发图」和「打码」。</div>
 
-  <div class="card"><h2><span class="dot"></span>基础 / 触发</h2><div class="grid" id="sec-base"></div></div>
-  <div class="card"><h2><span class="dot"></span>回复</h2><div class="grid" id="sec-reply"></div></div>
-  <div class="card"><h2><span class="dot"></span>发送</h2><div class="grid" id="sec-send"></div></div>
-  <div class="card"><h2><span class="dot"></span>打码</h2><div class="grid" id="sec-mask"></div>
-    <div class="row" style="margin-top:12px"><button id="btn-api">检测打码 API</button></div>
-    <div class="status" id="api-status">未检测。</div>
-  </div>
-  <div class="card"><h2><span class="dot"></span>代理设置</h2><div class="grid" id="sec-proxy"></div>
-    <div class="row" style="margin-top:12px"><button id="btn-proxy">测试代理</button></div>
-    <div class="status" id="proxy-status">未检测。</div>
-  </div>
+  <div class="summary-bar" id="summary-bar"></div>
 
-  <div class="card"><h2><span class="dot"></span>jmcomic 分流设置</h2>
-    <div class="row"><button id="btn-domains">检测 jmcomic 分流</button><span class="sub" id="domain-summary" style="margin:0"></span></div>
-    <table id="domain-table" style="display:none"><thead><tr><th>类型</th><th>分流域名</th><th>可调用</th><th>耗时</th><th>信息</th></tr></thead><tbody id="domain-body"></tbody></table>
-    <div class="status" id="domains-status">未检测。</div>
-    <div class="row" style="margin-top:14px">
-      <span style="font-size:13px">手动选择分流：</span>
-      <select id="domain-select" style="max-width:280px"></select>
-      <button class="primary" id="btn-save-domain">保存分流</button>
+  <details class="group" open>
+    <summary>核心设置<span class="tag">常用</span></summary>
+    <div class="body">
+      <div class="subhead">触发</div>
+      <div class="grid" id="sec-base"></div>
+      <div class="subhead">渠道</div>
+      <div class="grid" id="sec-adult"></div>
+      <div class="grid" id="sec-channel"></div>
+        <div class="subhead">搜索</div>
+      <div class="grid" id="sec-filter"></div>
+      <div class="grid" id="sec-search"></div>
+      <div class="subhead">今日推荐</div>
+      <div class="grid" id="sec-daily"></div>
     </div>
-    <div class="status" id="save-domain-status" style="display:none"></div>
-  </div>
+  </details>
 
-  <div class="card"><h2><span class="dot"></span>分群 / 私聊覆盖</h2>
-    <div class="sub" style="margin:0 0 8px">留空继承全局；填群号（群聊）或用户ID/会话ID（私聊），可单独控制发图与打码。</div>
-    <div class="row">
-      <input type="text" id="sess-id" placeholder="群号 或 私聊 用户ID/会话ID" style="max-width:280px">
-      <select id="sess-cover"><option value="inherit">发图：继承</option><option value="true">发图：开</option><option value="false">发图：关</option></select>
-      <select id="sess-mask"><option value="inherit">打码：继承</option><option value="true">打码：开</option><option value="false">打码：关</option></select>
-      <button class="primary" id="btn-save-session">添加 / 保存</button>
+  <details class="group">
+    <summary>回复与发送</summary>
+    <div class="body">
+      <div class="grid" id="sec-reply"></div>
+      <div class="grid" id="sec-send"></div>
     </div>
-    <table id="sess-table"><thead><tr><th>群号 / 会话</th><th>发图</th><th>打码</th><th></th></tr></thead><tbody id="sess-body"></tbody></table>
-    <div class="status" id="sess-status" style="display:none"></div>
-  </div>
+  </details>
+
+  <details class="group">
+    <summary>打码</summary>
+    <div class="body">
+      <div class="grid" id="sec-mask"></div>
+      <div class="row" style="margin-top:12px"><button id="btn-api">检测打码 API</button></div>
+      <div class="status" id="api-status">未检测。</div>
+    </div>
+  </details>
+
+  <details class="group">
+    <summary>网络与分流</summary>
+    <div class="body">
+      <div class="grid" id="sec-proxy"></div>
+      <div class="row" style="margin-top:12px"><button id="btn-proxy">测试代理</button></div>
+      <div class="status" id="proxy-status">未检测。</div>
+      <div class="subhead">分流设置</div>
+      <div class="row"><button id="btn-domains">检测 jmcomic 分流</button><span class="sub" id="domain-summary" style="margin:0"></span></div>
+      <table id="domain-table" style="display:none"><thead><tr><th>类型</th><th>分流域名</th><th>可调用</th><th>耗时</th><th>信息</th></tr></thead><tbody id="domain-body"></tbody></table>
+      <div class="status" id="domains-status">未检测。</div>
+      <div class="row" style="margin-top:10px">
+        <span style="font-size:13px">jmcomic：</span>
+        <select id="domain-select" style="max-width:280px"></select>
+        <button class="primary" id="btn-save-domain">保存</button>
+      </div>
+      <div class="status" id="save-domain-status" style="display:none"></div>
+
+      <div class="row" style="margin-top:16px"><button id="btn-copy-domains">检测拷贝漫画分流</button><span class="sub" id="copy-domain-summary" style="margin:0"></span></div>
+      <table id="copy-domain-table" style="display:none"><thead><tr><th>分流域名</th><th>可调用</th><th>耗时</th><th>信息</th></tr></thead><tbody id="copy-domain-body"></tbody></table>
+      <div class="status" id="copy-domains-status">未检测。</div>
+      <div class="row" style="margin-top:10px">
+        <span style="font-size:13px">拷贝漫画：</span>
+        <select id="copy-domain-select" style="max-width:280px"></select>
+        <button class="primary" id="btn-save-copy-domain">保存</button>
+      </div>
+      <div class="status" id="save-copy-domain-status" style="display:none"></div>
+
+      <div class="row" style="margin-top:16px"><button id="btn-gm-domains">检测 G站漫画分流</button><span class="sub" id="gm-domain-summary" style="margin:0"></span></div>
+      <table id="gm-domain-table" style="display:none"><thead><tr><th>分流域名</th><th>可调用</th><th>耗时</th><th>信息</th></tr></thead><tbody id="gm-domain-body"></tbody></table>
+      <div class="status" id="gm-domains-status">未检测。</div>
+      <div class="row" style="margin-top:10px">
+        <span style="font-size:13px">G站漫画：</span>
+        <select id="gm-domain-select" style="max-width:280px"></select>
+        <button class="primary" id="btn-save-gm-domain">保存</button>
+      </div>
+      <div class="status" id="save-gm-domain-status" style="display:none"></div>
+    </div>
+  </details>
+
+  <details class="group">
+    <summary>高级 · 分群 / 私聊覆盖</summary>
+    <div class="body">
+      <div class="sub" style="margin:0 0 8px">留空继承全局；填群号（群聊）或用户ID/会话ID（私聊），可单独控制发图与打码。</div>
+      <div class="row">
+        <input type="text" id="sess-id" placeholder="群号 或 私聊 用户ID/会话ID" style="max-width:280px">
+        <select id="sess-cover"><option value="inherit">发图：继承</option><option value="true">发图：开</option><option value="false">发图：关</option></select>
+        <select id="sess-mask"><option value="inherit">打码：继承</option><option value="true">打码：开</option><option value="false">打码：关</option></select>
+        <select id="sess-adult"><option value="inherit">NSFW：继承</option><option value="true">NSFW：允许</option><option value="false">NSFW：禁止</option></select>
+        <button class="primary" id="btn-save-session">添加 / 保存</button>
+      </div>
+      <table id="sess-table"><thead><tr><th>群号 / 会话</th><th>发图</th><th>打码</th><th></th></tr></thead><tbody id="sess-body"></tbody></table>
+      <div class="status" id="sess-status" style="display:none"></div>
+    </div>
+  </details>
 
   <div class="savebar"><span class="sub" id="save-hint" style="margin:0;align-self:center"></span><button class="primary" id="btn-save-all">保存全部设置</button></div>
-  <div class="footer">麦麦看本 v1.0.0</div>
+  <div class="footer">麦麦漫画 v1.0.0</div>
 </div>
 
 <script type="module">
@@ -97,7 +165,7 @@ const SECTIONS = {
   'sec-base': [
     ['plugin.enabled','启用插件','switch'],
     ['jm.enabled','启用查询','switch'],
-    ['jm.allowed_groups','启用群（留空=全部）','list','群号/会话ID，逗号分隔；留空=所有群'],
+    ['jm.allowed_groups','启用群','list','群号/会话ID，逗号分隔；留空=所有群生效'],
     ['jm.allow_private','允许私聊使用','switch'],
     ['jm.trigger_mode','触发模式','select',[['prefix','prefix（前缀+数字）'],['any','any（纯数字）']]],
     ['jm.prefixes','触发前缀','list','逗号分隔，仅 prefix 模式'],
@@ -115,12 +183,13 @@ const SECTIONS = {
   'sec-send': [
     ['jm.send_cover','发送封面','switch'],
     ['jm.private_send_cover','私聊发图','select',[['inherit','跟随全局'],['on','开'],['off','关']]],
-    ['jm.bundle_forward','打包成聊天记录（关=分开发）','switch'],
+    ['jm.bundle_forward','合并转发','switch','开：标题+封面合成一条聊天记录；关：分两条发'],
     ['jm.quote_original','引用原消息','switch'],
     ['jm.inject_context','注入上下文','switch'],
   ],
   'sec-mask': [
     ['jm.masking_enabled','启用打码服务','switch'],
+    ['jm.sfw_cover_mask','全年龄站也打码','switch','默认关闭：拷贝/G站封面直接发原图'],
     ['jm.private_masking_enabled','私聊打码','select',[['inherit','跟随全局'],['on','开'],['off','关']]],
     ['jm.mosaic_style','打码样式','select',[['mosaic','mosaic 马赛克'],['blur','blur 模糊']]],
     ['jm.ahm_api_url','打码 API 地址','text'],
@@ -130,8 +199,40 @@ const SECTIONS = {
     ['jm.min_boxes','兜底最少框数','number'],
   ],
   'sec-proxy': [
-    ['jm.proxy_enabled','允许使用代理服务','switch'],
-    ['jm.proxy_url','代理地址','text','http://127.0.0.1:7890 或 socks5://...'],
+    ['jm.proxy_enabled','启用代理','switch','对所有渠道生效'],
+    ['jm.proxy_url','代理地址','text','http://127.0.0.1:7890 或 socks5://...（对所有渠道生效）'],
+  ],
+  'sec-adult': [
+    ['jm.adult_declared','我已满 18 岁并同意','switch','勾选表示你已成年，并自行承担在所在群启用 NSFW 渠道的责任'],
+    ['jm.adult_enabled','启用 NSFW 渠道','switch','需先勾选上面的声明；开启后 JM / nhentai / E-Hentai 设置项才会出现'],
+    ['jm.adult_private','私聊 NSFW','select',[['inherit','跟随总开关'],['on','允许'],['off','禁止']],'adult'],
+  ],
+  'sec-channel': [
+    ['jm.copymanga_enabled','启用拷贝漫画','switch'],
+    ['jm.copymanga_token','拷贝漫画 token','text','一般不用填；搜索走公开接口，不需要登录'],
+    ['jm.gmanga_enabled','启用 G站漫画','switch'],
+    ['jm.nhentai_enabled','启用 nhentai','switch','','adult'],
+    ['jm.eh_enabled','启用 E-Hentai','switch','','adult'],
+    ['jm.eh_site','E-Hentai 站点','select',[['e','e 表站（匿名可访问）'],['ex','ex 里站（需填 cookie）']],'adult'],
+    ['jm.eh_cookie_member','ipb_member_id','text','里站 cookie，仅站点=ex 时需要；属凭据','adult'],
+    ['jm.eh_cookie_pass','ipb_pass_hash','text','里站 cookie，与上一项配套','adult'],
+  ],
+  'sec-filter': [
+    ['jm.sfw_only','只搜全年龄','switch','开启后搜索类命令只返回全年龄内容（nhentai tag:non-h / E-Hentai other:non-h）','adult'],
+  ],
+  'sec-daily': [
+    ['jm.daily_enabled','今日推荐','switch','每天定时从所有启用渠道各抓一本，LLM 挑选后推送'],
+    ['jm.daily_time','推送时间','text','24 小时制 HH:MM，如 09:00'],
+    ['jm.daily_targets','推送目标','list','群号或会话ID，逗号分隔；留空不推送'],
+    ['jm.daily_count','推荐条数','number','1-5'],
+    ['jm.daily_cover','带封面','switch','关闭则只推文字'],
+    ['jm.daily_forward','合并转发','switch','以聊天记录形式发出；私聊不支持会自动分开'],
+  ],
+  'sec-search': [
+    ['jm.search_enabled','搜漫画（关键词）','switch','允许 /搜漫画 关键词'],
+    ['jm.tag_search_enabled','搜标签','switch','允许 /搜标签 标签'],
+    ['jm.search_max_results','结果条数','number','1-10，搜索类命令最多返回几条'],
+    ['jm.t2s_enabled','自动转简体','switch','拷贝漫画 / G站漫画 返回繁体，开启后标题和作者统一转简体'],
   ],
 };
 
@@ -139,8 +240,9 @@ function getPath(obj, path) { return path.split('.').reduce((o,k)=>o?.[k], obj);
 function setPath(obj, path, val) { const ks=path.split('.'); let o=obj; for (let i=0;i<ks.length-1;i++){ o[ks[i]] = o[ks[i]] || {}; o=o[ks[i]]; } o[ks.at(-1)] = val; }
 
 function makeField(def) {
-  const [path,label,type,extra] = def;
+  const [path,label,type,extra,gate] = def;
   const wrap=document.createElement('div'); wrap.className='field';
+  if (gate) wrap.dataset.gate = gate;
   const lab=document.createElement('label'); lab.textContent=label; wrap.appendChild(lab);
   const id='f_'+path.replaceAll('.','_');
   let el;
@@ -164,6 +266,9 @@ function makeField(def) {
     wrap.appendChild(el);
   }
   if (typeof extra === 'string') { const h=document.createElement('div'); h.className='hint'; h.textContent=extra; wrap.appendChild(h); }
+  const refresh = () => { try { renderSummary(); updateGates(); } catch (e) {} };
+  el.addEventListener('change', refresh);
+  el.addEventListener('input', refresh);
   return wrap;
 }
 
@@ -172,6 +277,50 @@ function renderSections() {
     const box=$(secId); if(!box) continue; box.innerHTML='';
     for (const def of defs) box.appendChild(makeField(def));
   }
+}
+
+// NSFW 门禁：未签署声明或未开启开关时，隐藏所有 gate="adult" 的字段
+function adultUnlocked() {
+  try {
+    const jm = (collectSettings().jm) || {};
+    return !!(jm.adult_declared && jm.adult_enabled);
+  } catch (e) {
+    const jm = (settings && settings.jm) || {};
+    return !!(jm.adult_declared && jm.adult_enabled);
+  }
+}
+
+function updateGates() {
+  const on = adultUnlocked();
+  document.querySelectorAll('[data-gate="adult"]').forEach(el => {
+    el.style.display = on ? '' : 'none';
+  });
+}
+
+// 顶部状态摘要：一眼看出当前生效的渠道 / 过滤 / 搜索状态
+function renderSummary() {
+  const bar = $('summary-bar'); if (!bar) return;
+  let jm = {};
+  try { jm = (collectSettings().jm) || {}; } catch (e) { jm = (settings && settings.jm) || {}; }
+  const chips = [];
+  const add = (text, cls) => chips.push(`<span class="chip ${cls||''}">${text}</span>`);
+  add(jm.enabled ? '查询已启用' : '查询已关闭', jm.enabled ? 'on' : 'off');
+  const ch = [];
+  if (adultUnlocked()) {
+    if (jm.nhentai_enabled) ch.push('nhentai');
+    if (jm.eh_enabled) ch.push('E-Hentai ' + (jm.eh_site === 'ex' ? '里站' : '表站'));
+  }
+  if (jm.copymanga_enabled) ch.push('拷贝漫画');
+  if (jm.gmanga_enabled) ch.push('G站漫画');
+  if (ch.length) add(ch.join(' · '), 'on'); else add('无渠道', 'warn');
+  if (adultUnlocked()) add(jm.sfw_only ? '只搜全年龄' : '不过滤 NSFW', jm.sfw_only ? 'on' : 'warn');
+  const sc = [];
+  if (jm.search_enabled) sc.push('搜名字');
+  if (jm.tag_search_enabled) sc.push('标签');
+  add(sc.length ? '搜索：' + sc.join('/') : '搜索已关', sc.length ? '' : 'off');
+  if (jm.proxy_enabled && jm.proxy_url) add('代理已开', 'on');
+  if (adultUnlocked() && jm.eh_site === 'ex' && !(jm.eh_cookie_member && jm.eh_cookie_pass)) add('里站缺 cookie', 'warn');
+  bar.innerHTML = chips.join('');
 }
 
 function fillSections() {
@@ -201,6 +350,67 @@ function collectSettings() {
 }
 
 function setStatus(el, text, tone) { el.textContent=text; el.className='status'+(tone?' '+tone:''); }
+
+// 拷贝漫画 / G站漫画 的分流渲染与检测（和 jmcomic 那套同样的交互）
+function renderSiteDomain(kind, rows, curVal) {
+  const tbl = $(kind + '-domain-table'), body = $(kind + '-domain-body'), sum = $(kind + '-domain-summary');
+  if (!body) return;
+  body.innerHTML = '';
+  if (!rows || !rows.length) { if (tbl) tbl.style.display = 'none'; if (sum) sum.textContent = ''; }
+  else {
+    let ok = 0;
+    for (const r of rows) {
+      if (r.ok) ok++;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.domain || ''}</td><td class="${r.ok ? 'ok' : 'bad'}">${r.ok ? '✅ 可用' : '❌ 不可用'}</td><td>${r.ms != null ? r.ms + ' ms' : '—'}</td><td>${r.info || ''}</td>`;
+      body.appendChild(tr);
+    }
+    if (tbl) tbl.style.display = '';
+    if (sum) sum.textContent = `${ok}/${rows.length} 可用`;
+  }
+  const sel = $(kind + '-domain-select');
+  if (sel) {
+    sel.innerHTML = '';
+    const auto = document.createElement('option');
+    auto.value = ''; auto.textContent = '自动选择（探活）';
+    if (!curVal) auto.selected = true;
+    sel.appendChild(auto);
+    for (const r of (rows || [])) {
+      const o = document.createElement('option');
+      o.value = r.domain; o.textContent = r.domain + (r.ok ? '' : '（不可用）');
+      if (curVal === r.domain) o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+}
+
+async function checkSiteDomains(kind) {
+  const st = $(kind + '-domains-status'), btn = $('btn-' + kind + '-domains');
+  if (st) setStatus(st, '检测中…', 'neutral');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await maibot.action('check_' + kind + '_domains', {});
+    const cur = kind === 'copy' ? (settings?.jm?.copymanga_domain || '') : (settings?.jm?.gmanga_domain || '');
+    renderSiteDomain(kind, res.rows || [], cur);
+    if (st && res.state) setStatus(st, res.state.text || '', res.state.tone || 'neutral');
+  } catch (e) {
+    if (st) setStatus(st, '检测失败：' + (e?.message || e), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function saveSiteDomain(kind) {
+  const sel = $(kind + '-domain-select'), st = $('save-' + kind + '-domain-status');
+  const val = sel ? sel.value : '';
+  try {
+    const res = await maibot.action('save_' + kind + '_domain', kind === 'copy' ? { copymanga_domain: val } : { gmanga_domain: val });
+    if (st) { st.style.display = ''; setStatus(st, '已保存：' + ((kind === 'copy' ? res.copymanga_domain : res.gmanga_domain) || '自动选择'), 'success'); }
+    await refreshStatus();
+  } catch (e) {
+    if (st) { st.style.display = ''; setStatus(st, '保存失败：' + (e?.message || e), 'error'); }
+  }
+}
 
 function renderDomain(st) {
   const rows=st.domain_rows||[];
@@ -246,7 +456,7 @@ async function refreshStatus() {
   try { status=await maibot.query('status'); renderDomain(status); } catch(e){}
 }
 async function refreshSettings() {
-  try { settings=await maibot.query('settings'); fillSections(); renderSessions(); } catch(e){}
+  try { settings=await maibot.query('settings'); fillSections(); renderSessions(); renderSummary(); updateGates(); } catch(e){}
 }
 
 async function saveAll() {
@@ -277,7 +487,7 @@ async function saveDomain() {
 async function saveSession() {
   const btn=$('btn-save-session'); btn.disabled=true;
   try {
-    const payload={session:$('sess-id').value.trim(), send_cover:$('sess-cover').value, masking_enabled:$('sess-mask').value};
+    const payload={session:$('sess-id').value.trim(), send_cover:$('sess-cover').value, masking_enabled:$('sess-mask').value, adult:$('sess-adult').value};
     await maibot.action('save_session',{payload:JSON.stringify(payload)});
     const el=$('sess-status'); el.style.display=''; setStatus(el,'已保存：'+payload.session,'success');
     await refreshSettings();
@@ -298,6 +508,11 @@ $('btn-save-all').onclick=saveAll;
 $('btn-api').onclick=()=>runCheck('check_api',$('api-status'),$('btn-api'));
 $('btn-proxy').onclick=()=>runCheck('check_proxy',$('proxy-status'),$('btn-proxy'));
 $('btn-domains').onclick=()=>runCheck('check_domains',$('domains-status'),$('btn-domains'));
+const bindIf = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+bindIf('btn-copy-domains', () => checkSiteDomains('copy'));
+bindIf('btn-gm-domains', () => checkSiteDomains('gm'));
+bindIf('btn-save-copy-domain', () => saveSiteDomain('copy'));
+bindIf('btn-save-gm-domain', () => saveSiteDomain('gm'));
 $('btn-save-domain').onclick=saveDomain;
 $('btn-save-session').onclick=saveSession;
 </script>

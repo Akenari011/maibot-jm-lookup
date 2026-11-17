@@ -1,18 +1,18 @@
 {
   "manifest_version": 2,
-  "id": "github.akenari011.jm-lookup",
-  "version": "1.0.0",
-  "name": "麦麦看本",
-  "description": "群里出现禁漫天堂本子号时，自动抓取标题和作者并回复。支持前缀/纯数字触发、自定义前缀、冷却、无结果策略、引用/合并转发、封面本地打码与漏检兜底。",
+  "id": "github.Akenari011.maibot-manga",
+  "version": "1.1.0",
+  "name": "麦麦漫画",
+  "description": "跨渠道漫画查询与推荐。支持拷贝漫画、G站漫画等站点，可按关键词或标签搜索并返回链接；封面可选本地打码，按群或私聊单独控制；每天定时从各渠道各抓一本，由 LLM 挑选后推送今日推荐。",
   "author": {
     "name": "Akenari011",
     "url": "https://github.com/Akenari011"
   },
   "license": "MIT",
   "urls": {
-    "repository": "https://github.com/Akenari011/maibot-jm-lookup",
-    "homepage": "https://github.com/Akenari011/maibot-jm-lookup",
-    "issues": "https://github.com/Akenari011/maibot-jm-lookup/issues"
+    "repository": "https://github.com/Akenari011/maibot-manga",
+    "homepage": "https://github.com/Akenari011/maibot-manga",
+    "issues": "https://github.com/Akenari011/maibot-manga/issues"
   },
   "host_application": {
     "min_version": "1.4.0",
@@ -32,10 +32,15 @@
       "type": "python_package",
       "name": "httpx",
       "version_spec": ">=0.20"
+    },
+    {
+      "type": "python_package",
+      "name": "zhconv",
+      "version_spec": ">=1.4.0"
     }
   ],
   "changelog": "CHANGELOG.md",
-  "plugin_type": "extension",
+  "plugin_type": "tool",
   "i18n": {
     "default_locale": "zh-CN"
   },
@@ -43,7 +48,8 @@
     "send.text",
     "send.image",
     "send.hybrid",
-    "send.forward"
+    "send.forward",
+    "llm.generate"
   ],
   "display": {
     "icon": {

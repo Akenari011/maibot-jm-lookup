@@ -1,43 +1,111 @@
 {
   "schema_version": 2,
-  "required_capabilities": ["custom_pages"],
-  "workspace_title": "麦麦看本",
+  "required_capabilities": [
+    "custom_pages"
+  ],
+  "workspace_title": "麦麦漫画",
   "pages": [
     {
       "id": "settings",
-      "title": "麦麦看本 · 设置",
+      "title": "麦麦漫画 · 设置",
       "description": "全部插件设置：触发/回复/发送/打码/代理/分流，以及分群与私聊的发图、打码开关",
       "icon": "settings",
       "mode": "custom",
       "entry": "webui/check.html",
       "layout": "document",
       "queries": {
-        "status": {"api": "webui_status", "version": "1"},
-        "settings": {"api": "webui_settings", "version": "1"}
+        "status": {
+          "api": "webui_status",
+          "version": "1"
+        },
+        "settings": {
+          "api": "webui_settings",
+          "version": "1"
+        }
       },
       "actions": {
         "save_settings": {
           "api": "webui_save_settings",
           "version": "1",
-          "parameters": {"payload": {"type": "string", "required": true, "max_length": 65536}}
+          "parameters": {
+            "payload": {
+              "type": "string",
+              "required": true,
+              "max_length": 65536
+            }
+          }
         },
         "save_session": {
           "api": "webui_save_session",
           "version": "1",
-          "parameters": {"payload": {"type": "string", "required": true, "max_length": 65536}}
+          "parameters": {
+            "payload": {
+              "type": "string",
+              "required": true,
+              "max_length": 65536
+            }
+          }
         },
         "delete_session": {
           "api": "webui_delete_session",
           "version": "1",
-          "parameters": {"payload": {"type": "string", "required": true, "max_length": 65536}}
+          "parameters": {
+            "payload": {
+              "type": "string",
+              "required": true,
+              "max_length": 65536
+            }
+          }
         },
-        "check_api": {"api": "webui_check_api", "version": "1"},
-        "check_proxy": {"api": "webui_check_proxy", "version": "1"},
-        "check_domains": {"api": "webui_check_domains", "version": "1"},
+        "check_api": {
+          "api": "webui_check_api",
+          "version": "1"
+        },
+        "check_proxy": {
+          "api": "webui_check_proxy",
+          "version": "1"
+        },
+        "check_domains": {
+          "api": "webui_check_domains",
+          "version": "1"
+        },
         "save_domain": {
           "api": "webui_save_domain",
           "version": "1",
-          "parameters": {"jm_domain": {"type": "string", "required": true}}
+          "parameters": {
+            "jm_domain": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "check_copy_domains": {
+          "api": "webui_check_copy_domains",
+          "version": "1"
+        },
+        "check_gm_domains": {
+          "api": "webui_check_gm_domains",
+          "version": "1"
+        },
+        "save_copy_domain": {
+          "api": "webui_save_copy_domain",
+          "version": "1",
+          "parameters": {
+            "copymanga_domain": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "save_gm_domain": {
+          "api": "webui_save_gm_domain",
+          "version": "1",
+          "parameters": {
+            "gmanga_domain": {
+              "type": "string",
+              "required": true
+            }
+          }
         }
       }
     }

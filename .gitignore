@@ -1,20 +1,5 @@
-# 运行时配置（由 Runner 生成，不提交）
-/config.toml
-
-# Python 缓存
+# 运行配置含 token/密码，不进版本控制（官方插件中心要求）
+config.toml
 __pycache__/
-*.py[cod]
-*.pyo
-
-# 测试/备份
-config_back/
-*.bak
-*.backup*
-
-# 虚拟环境
-.venv/
-venv/
-
-# 系统
-.DS_Store
-Thumbs.db
+*.pyc
+*.bak-*
