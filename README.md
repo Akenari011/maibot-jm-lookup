@@ -174,6 +174,13 @@ POST http://127.0.0.1:8000/process/
 推荐用单文件 Rust 服务 [jm-mask-rs](https://github.com/Akenari011/jm-mask-rs)：
 不需要 Python、venv 或 pip，约 104 MB 共 4 个文件。
 
+**一键自动安装**：群里发 `/打码安装`，插件会按当前平台从 Release 下载二进制和
+运行时包（约 53-80 MB），解压到插件数据目录并启动。也可以在设置页打开
+「自动安装打码服务」，首次加载时自动完成。
+
+> 已经用 systemd 常驻打码服务时，请把「插件托管打码进程」关掉（`ahm_manage_process = false`），
+> 否则插件会再起一份、和 systemd 抢 8000 端口。
+
 ```bash
 # 1) 准备四件套
 #    jm-mask-rs 二进制、libonnxruntime.so、

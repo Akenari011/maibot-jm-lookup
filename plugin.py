@@ -740,6 +740,16 @@ class JmConfig(PluginConfigBase):
     ahm_api_url: str = Field(
         default="http://127.0.0.1:8000/process/", description="打码服务 API 地址",
         json_schema_extra={"label": "打码 API 地址", "hint": "本地打码服务接口（默认 http://127.0.0.1:8000/process/）。部署方式见 README / install.sh。", "order": 17})
+    ahm_auto_install: bool = Field(
+        default=False, description="自动安装打码服务",
+        json_schema_extra={"label": "自动安装打码服务", "hint": "开启后首次加载会从 jm-mask-rs 的 Release 下载约 53-80 MB 运行时并启动本地服务；默认关闭，也可用「/打码安装」手动安装。", "order": 17})
+    mask_install_dir: str = Field(
+        default="", description="打码服务安装目录",
+        json_schema_extra={"label": "安装目录", "hint": "留空则装在插件数据目录下的 jm-mask-rs；可指定绝对路径。", "order": 19})
+    ahm_manage_process: bool = Field(
+        default=True, description="由插件托管打码进程",
+        json_schema_extra={"label": "插件托管进程", "hint": "开启后插件负责启动/停止打码服务；若你已用 systemd 常驻，请关闭以免重复启动。", "order": 18})
+
     mosaic_style: Literal["mosaic", "blur"] = Field(
         default="mosaic", description="打码样式",
         json_schema_extra={"label": "打码样式", "hint": "封面打码外观：mosaic=像素马赛克；blur=高斯模糊。", "order": 18})
@@ -903,6 +913,10 @@ class JmLookupPlugin(MaiBotPlugin):
         self._session_overrides = self._load_sessions()
         if self._daily_task is None or self._daily_task.done():
             self._daily_task = asyncio.create_task(self._daily_loop())
+        try:
+            await self._mask_ensure()
+        except Exception as exc:
+            self.ctx.logger.warning("打码服务初始化失败: %s", type(exc).__name__)
         self.ctx.logger.info("麦麦漫画插件已加载")
 
     async def on_unload(self) -> None:
@@ -914,6 +928,7 @@ class JmLookupPlugin(MaiBotPlugin):
             await asyncio.gather(*tasks, return_exceptions=True)
         self._bg_tasks.clear()
         self._daily_task = self._domain_task = None
+        self._mask_stop()
         self._cache.clear()
         self._client = None
         self.ctx.logger.info("麦麦漫画插件已卸载")
@@ -1812,6 +1827,158 @@ class JmLookupPlugin(MaiBotPlugin):
             self.ctx.logger.warning(f"[jm] 下载封面 {aid} 失败: {type(exc).__name__}: {exc}")
             return None
 
+    # ---------------------------------------------------------------- 打码服务自安装（jm-mask-rs）
+    MASK_RELEASE = "v0.1.0"
+    MASK_REPO = "Akenari011/jm-mask-rs"
+
+    def _mask_assets(self) -> tuple[str, str] | None:
+        """按当前平台返回 (二进制资产名, 运行时资产名)；不支持的平台返回 None。"""
+        import platform
+
+        system = platform.system().lower()
+        machine = platform.machine().lower()
+        if system == "linux" and machine in ("aarch64", "arm64"):
+            return ("jm-mask-rs-linux-aarch64", "runtime-linux-aarch64.tar.gz")
+        if system == "linux" and machine in ("x86_64", "amd64"):
+            return ("jm-mask-rs-linux-x86_64", "runtime-linux-x86_64.tar.gz")
+        return None
+
+    def _mask_dir(self):
+        from pathlib import Path
+
+        cfg = self.config.jm
+        raw = str(getattr(cfg, "mask_install_dir", "") or "").strip()
+        return Path(raw) if raw else Path(self.ctx.paths.data_dir) / "jm-mask-rs"
+
+    def _mask_binary(self):
+        return self._mask_dir() / "jm-mask-rs"
+
+    def _mask_argv(self) -> list[str]:
+        cfg = self.config.jm
+        d = self._mask_dir()
+        return [
+            str(self._mask_binary()),
+        ]
+
+    def _mask_env(self) -> dict[str, str]:
+        import os
+
+        cfg = self.config.jm
+        d = self._mask_dir()
+        api = str(cfg.ahm_api_url or "")
+        addr = "127.0.0.1:8000"
+        match = re.search(r"//([^/]+)", api)
+        if match:
+            addr = match.group(1)
+        env = dict(os.environ)
+        env.update({
+            "MASK_ADDR": addr,
+            "MASK_ORT_DYLIB": str(d / "libonnxruntime.so.1.32.0"),
+            "MASK_SEG_MODEL": str(d / "segmentation_model.onnx"),
+            "MASK_CLS_MODEL": str(d / "classification_model.onnx"),
+        })
+        return env
+
+    async def _mask_download(self, url: str, dest, timeout: float = 300.0) -> None:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cli:
+            async with cli.stream("GET", url) as resp:
+                resp.raise_for_status()
+                with open(dest, "wb") as fp:
+                    async for chunk in resp.aiter_bytes(1 << 20):
+                        fp.write(chunk)
+
+    async def _mask_install(self) -> ConfigWidgetState:
+        """下载二进制与运行时并落地到插件数据目录。"""
+        import shutil
+        import tarfile
+
+        assets = self._mask_assets()
+        if assets is None:
+            return ConfigWidgetState(text="打码服务：当前平台没有预编译包（仅支持 Linux x86_64 / aarch64）", tone="error")
+        binary_asset, runtime_asset = assets
+        base = f"https://github.com/{self.MASK_REPO}/releases/download/{self.MASK_RELEASE}"
+        d = self._mask_dir()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            tmp_bin = d / ".jm-mask-rs.part"
+            tmp_rt = d / ".runtime.part"
+            await self._mask_download(f"{base}/{binary_asset}", tmp_bin)
+            await self._mask_download(f"{base}/{runtime_asset}", tmp_rt, timeout=600.0)
+            with tarfile.open(tmp_rt, "r:gz") as tar:
+                for member in tar.getmembers():
+                    name = member.name
+                    if not name.startswith("runtime/") or ".." in name.split("/"):
+                        continue
+                    member.name = name[len("runtime/"):]
+                    if not member.name:
+                        continue
+                    tar.extract(member, d)
+            tmp_bin.chmod(0o755)
+            tmp_bin.replace(self._mask_binary())
+            for leftover in (tmp_rt, d / "runtime"):
+                if leftover.is_dir():
+                    shutil.rmtree(leftover, ignore_errors=True)
+                elif leftover.exists():
+                    leftover.unlink(missing_ok=True)
+        except Exception as exc:
+            for leftover in (d / ".jm-mask-rs.part", d / ".runtime.part"):
+                leftover.unlink(missing_ok=True)
+            return ConfigWidgetState(text=f"打码服务安装失败：{type(exc).__name__}: {exc}", tone="error")
+        return ConfigWidgetState(text=f"打码服务已安装到 {d}", tone="success")
+
+    def _mask_running(self) -> bool:
+        proc = getattr(self, "_mask_proc", None)
+        return proc is not None and proc.poll() is None
+
+    async def _mask_start(self) -> ConfigWidgetState:
+        import subprocess
+
+        if not self._mask_running():
+            if not self._mask_binary().exists():
+                return ConfigWidgetState(text="打码服务未安装，请先执行 /打码安装", tone="warning")
+            try:
+                self._mask_proc = subprocess.Popen(  # noqa: S603
+                    [str(self._mask_binary())],
+                    cwd=str(self._mask_dir()),
+                    env=self._mask_env(),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as exc:
+                return ConfigWidgetState(text=f"打码服务启动失败：{type(exc).__name__}: {exc}", tone="error")
+            await asyncio.sleep(2.0)
+            if not self._mask_running():
+                return ConfigWidgetState(text="打码服务启动后立即退出", tone="error")
+        return ConfigWidgetState(text="打码服务运行中", tone="success")
+
+    def _mask_stop(self) -> None:
+        proc = getattr(self, "_mask_proc", None)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self._mask_proc = None
+
+    async def _mask_ensure(self) -> None:
+        cfg = self.config.jm
+        if not getattr(cfg, "ahm_manage_process", True):
+            return
+        if self._mask_running():
+            return
+        if not self._mask_binary().exists() and getattr(cfg, "ahm_auto_install", False):
+            state = await self._mask_install()
+            self.ctx.logger.info("打码服务自动安装: %s", state.text)
+        if self._mask_binary().exists():
+            state = await self._mask_start()
+            self.ctx.logger.info("打码服务: %s", state.text)
+
     async def _ahm_process(self, path: str) -> str | None:
         """调 AHM ONNX 服务打码；返回打码图 base64 / 'SKIP'(不发) / None(失败)。"""
         cfg = self.config.jm
@@ -2210,6 +2377,24 @@ class JmLookupPlugin(MaiBotPlugin):
             stream_id, prov, item, kw, cand_n, is_private=_pv
         )
         return (True, f"已推送：{item.title}", 1) if sent else (False, "推荐发送失败", 1)
+
+    @Command("maskinstall", pattern=r"^/(?:打码安装|maskinstall)$")
+    async def handle_mask_install(self, **kwargs):
+        stream_id = str(kwargs.get("stream_id") or "").strip()
+        if not stream_id:
+            return False, "用法：/打码安装", 1
+        if not self._command_allowed(kwargs):
+            return False, "本群未启用该功能", 1
+        state = await self._mask_install()
+        if state.tone != "success":
+            return False, state.text, 1
+        if getattr(self.config.jm, "ahm_manage_process", True):
+            start = await self._mask_start()
+            text = f"{state.text}\n{start.text}"
+        else:
+            text = state.text
+        await self._send(stream_id, text, self._reply_ctx_of(kwargs))
+        return True, text, 1
 
     @Command("jmhelp", pattern=r"^/(?:搜漫帮助|本帮助|jmhelp|帮助)$")
     async def handle_help_command(self, **kwargs):

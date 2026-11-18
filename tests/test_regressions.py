@@ -283,7 +283,7 @@ def test_timed_out_blocking_calls_keep_their_concurrency_slots():
 def test_actual_sdk_registers_commands_apis_and_hook():
     plugin = make_plugin()
     components = plugin.get_components()
-    assert len(components) == 24
+    assert len(components) == 25
 
 
 def test_webui_fields_match_backend_without_duplicates():
@@ -466,3 +466,40 @@ def test_plain_messages_still_auto_detect(plain_text, expected):
         assert len(created) == expected, plain_text
     finally:
         _asyncio.create_task = original
+
+
+def test_mask_assets_selects_platform(monkeypatch):
+    import platform as _platform
+    plugin = make_plugin()
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    monkeypatch.setattr(_platform, "machine", lambda: "aarch64")
+    assert plugin._mask_assets() == ("jm-mask-rs-linux-aarch64", "runtime-linux-aarch64.tar.gz")
+    monkeypatch.setattr(_platform, "machine", lambda: "x86_64")
+    assert plugin._mask_assets() == ("jm-mask-rs-linux-x86_64", "runtime-linux-x86_64.tar.gz")
+    monkeypatch.setattr(_platform, "system", lambda: "Windows")
+    assert plugin._mask_assets() is None
+
+
+def test_mask_env_points_into_install_dir(tmp_path):
+    plugin = make_plugin()
+    plugin.config.jm.mask_install_dir = str(tmp_path)
+    plugin.config.jm.ahm_api_url = "http://127.0.0.1:8123/process/"
+    env = plugin._mask_env()
+    assert env["MASK_ADDR"] == "127.0.0.1:8123"
+    assert env["MASK_SEG_MODEL"] == str(tmp_path / "segmentation_model.onnx")
+    assert env["MASK_CLS_MODEL"] == str(tmp_path / "classification_model.onnx")
+    assert env["MASK_ORT_DYLIB"] == str(tmp_path / "libonnxruntime.so.1.32.0")
+
+
+def test_mask_install_cleans_temp_files_on_failure(tmp_path, monkeypatch):
+    import platform as _platform
+    plugin = make_plugin()
+    plugin.config.jm.mask_install_dir = str(tmp_path)
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    monkeypatch.setattr(_platform, "machine", lambda: "aarch64")
+    async def boom(*args, **kwargs):
+        raise OSError("network down")
+    monkeypatch.setattr(plugin, "_mask_download", boom)
+    state = asyncio.run(plugin._mask_install())
+    assert state.tone == "error"
+    assert list(tmp_path.glob("*.part")) == []

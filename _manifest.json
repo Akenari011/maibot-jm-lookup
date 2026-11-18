@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "github.Akenari011.maibot-manga",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "name": "麦麦漫画",
   "description": "跨渠道漫画查询与推荐。支持拷贝漫画、G站漫画等站点，可按关键词或标签搜索并返回链接；封面可选本地打码，按群或私聊单独控制；每天定时从各渠道各抓一本，由 LLM 挑选后推送今日推荐。",
   "author": {
