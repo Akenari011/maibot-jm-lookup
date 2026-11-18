@@ -145,10 +145,10 @@
         <input type="text" id="sess-id" placeholder="群号 或 私聊 用户ID/会话ID" style="max-width:280px">
         <select id="sess-cover"><option value="inherit">发图：继承</option><option value="true">发图：开</option><option value="false">发图：关</option></select>
         <select id="sess-mask"><option value="inherit">打码：继承</option><option value="true">打码：开</option><option value="false">打码：关</option></select>
-        <select id="sess-adult"><option value="inherit">NSFW：继承</option><option value="true">NSFW：允许</option><option value="false">NSFW：禁止</option></select>
+        <select id="sess-adult" data-gate="adult"><option value="inherit">NSFW：继承</option><option value="true">NSFW：允许</option><option value="false">NSFW：禁止</option></select>
         <button class="primary" id="btn-save-session">添加 / 保存</button>
       </div>
-      <table id="sess-table"><thead><tr><th>群号 / 会话</th><th>发图</th><th>打码</th><th></th></tr></thead><tbody id="sess-body"></tbody></table>
+      <table id="sess-table"><thead><tr><th>群号 / 会话</th><th>发图</th><th>打码</th><th data-gate="adult">NSFW</th><th></th></tr></thead><tbody id="sess-body"></tbody></table>
       <div class="status" id="sess-status" style="display:none"></div>
     </div>
   </details>
@@ -441,12 +441,13 @@ function renderSessions() {
   const sessions=settings?.sessions||{};
   const body=$('sess-body'); body.innerHTML='';
   const keys=Object.keys(sessions);
-  if (!keys.length) { body.innerHTML='<tr><td colspan="4" class="hint">暂无覆盖（全部继承全局）</td></tr>'; return; }
+  if (!keys.length) { body.innerHTML='<tr><td colspan="5" class="hint">暂无覆盖（全部继承全局）</td></tr>'; return; }
   for (const k of keys) {
     const s=sessions[k]||{};
-    const fmt=v=>v===true?'开':v===false?'关':'继承';
+    const fmt=v=>v===true?'允许':v===false?'禁止':'继承';
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${k}</td><td>${fmt(s.send_cover)}</td><td>${fmt(s.masking_enabled)}</td><td></td>`;
+    tr.innerHTML=`<td></td><td>${fmt(s.send_cover)}</td><td>${fmt(s.masking_enabled)}</td><td data-gate="adult">${fmt(s.adult)}</td><td></td>`;
+    tr.firstElementChild.textContent=k;
     const btn=document.createElement('button'); btn.className='danger'; btn.textContent='删除'; btn.onclick=()=>delSession(k);
     tr.lastElementChild.appendChild(btn); body.appendChild(tr);
   }

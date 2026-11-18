@@ -33,6 +33,31 @@ def _load_jmcomic():
     return jmcomic
 
 
+# Keep timed-out blocking calls within the same concurrency budget until they finish.
+_NETWORK_SLOTS: Any = None
+
+async def _run_blocking(function: Any, timeout: float) -> Any:
+    import weakref
+    global _NETWORK_SLOTS
+    if _NETWORK_SLOTS is None:
+        _NETWORK_SLOTS = weakref.WeakKeyDictionary()
+    loop = asyncio.get_running_loop()
+    slots = _NETWORK_SLOTS.setdefault(loop, asyncio.Semaphore(4))
+    deadline = loop.time() + timeout
+    await asyncio.wait_for(slots.acquire(), timeout=max(0.001, timeout))
+    try:
+        future = loop.run_in_executor(None, function)
+    except BaseException:
+        slots.release()
+        raise
+    def finished(result: Any) -> None:
+        slots.release()
+        if not result.cancelled():
+            result.exception()
+    future.add_done_callback(finished)
+    return await asyncio.wait_for(asyncio.shield(future), timeout=max(0.001, deadline - loop.time()))
+
+
 # ---------------------------------------------------------------- 多渠道 provider
 class LookupResult(NamedTuple):
     """各渠道统一的查询结果。"""
@@ -123,7 +148,7 @@ class NhentaiProvider:
             )
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return None
 
@@ -157,7 +182,7 @@ class NhentaiProvider:
             return out
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return []
 
@@ -165,8 +190,8 @@ class NhentaiProvider:
         if not url:
             return None
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_http_get, url, timeout, None, self.proxy), timeout
+            return await _run_blocking(
+                lambda: _http_get(url, timeout, None, self.proxy), timeout
             )
         except Exception:
             return None
@@ -247,7 +272,7 @@ class EHentaiProvider:
             )
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return None
 
@@ -287,7 +312,7 @@ class EHentaiProvider:
             return out
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return []
 
@@ -295,8 +320,8 @@ class EHentaiProvider:
         if not url:
             return None
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_http_get, url, timeout, self._headers(), self.proxy), timeout
+            return await _run_blocking(
+                lambda: _http_get(url, timeout, self._headers(), self.proxy), timeout
             )
         except Exception:
             return None
@@ -367,12 +392,12 @@ class CopyMangaProvider:
             return self.domain
         if self._picked:
             return self._picked
-        host = await asyncio.to_thread(_probe_first, COPYMANGA_DOMAINS, timeout, self.proxy)
+        host = await _run_blocking(lambda: _probe_first(COPYMANGA_DOMAINS, timeout, self.proxy), timeout)
         self._picked = host
         return host
 
-    def _headers(self) -> dict[str, str]:
-        h = {"Referer": f"https://{self.domain or COPYMANGA_DOMAINS[0]}/"}
+    def _headers(self, host: str | None = None) -> dict[str, str]:
+        h = {"Referer": f"https://{host or self.domain or COPYMANGA_DOMAINS[0]}/"}
         if self.token:
             h["Authorization"] = f"Token {self.token}"
         return h
@@ -384,10 +409,13 @@ class CopyMangaProvider:
         if not slug:
             return None
 
+        host = await self._host(timeout)
+        if not host:
+            return None
+
         def _f() -> LookupResult | None:
-            host = self.domain or COPYMANGA_DOMAINS[0]
             url = f"https://{host}/comic/{slug}"
-            raw = _http_get(url, timeout, self._headers(), self.proxy).decode("utf-8", "replace")
+            raw = _http_get(url, timeout, self._headers(host), self.proxy).decode("utf-8", "replace")
             # 优先 <h6 title="漫画名">，它只有名字；<title> 里带一堆描述词
             title = ""
             m = _re.search(r'<h6[^>]+title="([^"]{1,120})"', raw)
@@ -416,7 +444,7 @@ class CopyMangaProvider:
             return LookupResult(title=title, author=author, url=url, cover_url=cover, desc=desc)
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return None
 
@@ -429,13 +457,16 @@ class CopyMangaProvider:
         import re as _re
         from urllib.parse import quote
 
+        host = await self._host(timeout)
+        if not host:
+            return []
+
         def _f() -> list[LookupResult]:
-            host = self.domain or COPYMANGA_DOMAINS[0]
             # 1) 拿当前站点的搜索接口路径
             api = "/api/kb/web/searchcl/comics"
             try:
                 page = _http_get(
-                    f"https://{host}/search", timeout, self._headers(), self.proxy
+                    f"https://{host}/search", timeout, self._headers(host), self.proxy
                 ).decode("utf-8", "replace")
                 m = _re.search(r'const countApi = "([^"]+)"', page)
                 if m:
@@ -447,7 +478,7 @@ class CopyMangaProvider:
                 f"https://{host}{api}?offset=0&platform=2&limit={max(1, min(10, limit))}"
                 f"&q={quote(query)}&q_type=0"
             )
-            raw = _http_get(url, timeout, self._headers(), self.proxy)
+            raw = _http_get(url, timeout, self._headers(host), self.proxy)
             d = json.loads(raw)
             out: list[LookupResult] = []
             for item in ((d.get("results") or {}).get("list") or [])[:limit]:
@@ -474,7 +505,7 @@ class CopyMangaProvider:
             return out
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return []
 
@@ -482,8 +513,8 @@ class CopyMangaProvider:
         if not url:
             return None
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_http_get, url, timeout, self._headers(), self.proxy), timeout
+            return await _run_blocking(
+                lambda: _http_get(url, timeout, self._headers(), self.proxy), timeout
             )
         except Exception:
             return None
@@ -513,7 +544,7 @@ class GMangaProvider:
             return self.domain
         if self._picked:
             return self._picked
-        host = await asyncio.to_thread(_probe_first, GMANGA_DOMAINS, timeout, self.proxy)
+        host = await _run_blocking(lambda: _probe_first(GMANGA_DOMAINS, timeout, self.proxy), timeout)
         self._picked = host
         return host
 
@@ -524,8 +555,11 @@ class GMangaProvider:
         if not slug:
             return None
 
+        host = await self._host(timeout)
+        if not host:
+            return None
+
         def _f() -> LookupResult | None:
-            host = self.domain or GMANGA_DOMAINS[0]
             # 老前端（webmota）用 /comic/，新前端用 /manga/；两种都试一下
             paths = ["/comic/", "/manga/"] if "webmota" in host else ["/manga/", "/comic/"]
             raw, url = "", ""
@@ -574,7 +608,7 @@ class GMangaProvider:
             return LookupResult(title=title, author=author, url=url, cover_url=cover, desc=desc)
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return None
 
@@ -583,8 +617,9 @@ class GMangaProvider:
         import re as _re
         from urllib.parse import quote
 
+        hosts = [self.domain] if self.domain else list(GMANGA_DOMAINS)
+
         def _f() -> list[LookupResult]:
-            hosts = [self.domain] if self.domain else list(GMANGA_DOMAINS)
             for host in hosts:
                 try:
                     raw = _http_get(
@@ -616,7 +651,7 @@ class GMangaProvider:
             return []
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_f), timeout)
+            return await _run_blocking(_f, timeout)
         except Exception:
             return []
 
@@ -624,8 +659,8 @@ class GMangaProvider:
         if not url:
             return None
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_http_get, url, timeout, None, self.proxy), timeout
+            return await _run_blocking(
+                lambda: _http_get(url, timeout, None, self.proxy), timeout
             )
         except Exception:
             return None
@@ -857,6 +892,8 @@ class JmLookupPlugin(MaiBotPlugin):
         self._bg_tasks: set[asyncio.Task] = set()
         self._daily_task: asyncio.Task | None = None
         self._daily_last: str = ""
+        self._daily_lock = asyncio.Lock()
+        self._session_info: dict[str, dict[str, Any]] = {}
         self._client: Any = None
         self._client_lock = asyncio.Lock()
         self._fetch_lock = asyncio.Lock()
@@ -869,17 +906,24 @@ class JmLookupPlugin(MaiBotPlugin):
         self.ctx.logger.info("麦麦漫画插件已加载")
 
     async def on_unload(self) -> None:
-        if self._daily_task and not self._daily_task.done():
-            self._daily_task.cancel()
-            self._daily_task = None
+        tasks = set(self._bg_tasks)
+        tasks.update(t for t in (self._daily_task, self._domain_task) if t is not None)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._bg_tasks.clear()
+        self._daily_task = self._domain_task = None
         self._cache.clear()
+        self._client = None
         self.ctx.logger.info("麦麦漫画插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict, version: str) -> None:
         if scope == "self":
-            self.ctx.logger.info("禁漫号查询插件配置已更新: version=%s", version)
+            self._client = None
+            self._cache.clear()
+            self.ctx.logger.info("麦麦漫画配置已更新: version=%s", version)
 
-    # ---------------------------------------------------------------- 会话级设置
     def _message_key(self, message: dict[str, Any]) -> str:
         gid = self._group_of(message)
         if gid:
@@ -891,16 +935,9 @@ class JmLookupPlugin(MaiBotPlugin):
         return str(message.get("session_id") or "")
 
     def _sessions_path(self):
-        from pathlib import Path  # noqa: PLC0415
-
-        try:
-            base = Path(str(self.ctx.paths.data_dir))
-        except Exception:
-            base = Path("/tmp")
-        try:
-            base.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            base = Path("/tmp")
+        from pathlib import Path
+        base = Path(self.ctx.paths.data_dir)
+        base.mkdir(parents=True, exist_ok=True)
         return base / "session_overrides.json"
 
     def _load_sessions(self) -> dict[str, dict[str, Any]]:
@@ -914,13 +951,30 @@ class JmLookupPlugin(MaiBotPlugin):
             return {}
 
     def _save_sessions_file(self) -> None:
-        import json  # noqa: PLC0415
-
-        self._sessions_path().write_text(json.dumps({"sessions": self._session_overrides}, ensure_ascii=False, indent=2), encoding="utf-8")
+        import json
+        path = self._sessions_path()
+        temp = path.with_suffix(".tmp")
+        try:
+            temp.write_text(json.dumps({"sessions": self._session_overrides}, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp.chmod(0o600)
+            temp.replace(path)
+        finally:
+            temp.unlink(missing_ok=True)
 
     def _eff_bool(self, key: str, session_key: str, default: bool) -> bool:
-        val = (self._session_overrides.get(str(session_key)) or {}).get(key)
-        return default if val is None else bool(val)
+        keys = [str(session_key)]
+        meta = self._session_info.get(str(session_key), {})
+        alias = meta.get("group_id") or meta.get("user_id")
+        if alias:
+            keys.append(str(alias))
+        match = re.fullmatch(r"qq_(?:group|private|friend)_(\d+)", str(session_key))
+        if match:
+            keys.append(match.group(1))
+        for candidate in keys:
+            val = (self._session_overrides.get(candidate) or {}).get(key)
+            if isinstance(val, bool):
+                return val
+        return default
 
     @staticmethod
     def _tri_state(value: Any, default: bool) -> bool:
@@ -943,55 +997,72 @@ class JmLookupPlugin(MaiBotPlugin):
         return self._eff_bool("masking_enabled", session_key, val)
 
     def _write_toml_sections(self, sections: dict[str, dict[str, Any]]) -> None:
-        """按 [section] 精确写回 config.toml（避免同名 key 串段）。"""
-        import re as _re  # noqa: PLC0415
-        import tomllib  # noqa: PLC0415
-        from pathlib import Path  # noqa: PLC0415
+        """按 section 精确、原子地写回 config.toml，再校验并同步内存。"""
+        import json
+        import re as _re
+        import tomllib
+        from pathlib import Path
 
         path = Path(__file__).resolve().with_name("config.toml")
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            lines = []
+        except OSError as exc:
+            raise ValueError(f"读取 config.toml 失败: {exc}") from exc
 
-        def fmt(v: Any) -> str:
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, (int, float)):
-                return str(v)
-            if isinstance(v, (list, tuple)):
-                return "[" + ", ".join(fmt(x) for x in v) + "]"
-            return '"' + str(v).replace('"', '\\"') + '"'
+        def fmt(value: Any) -> str:
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return str(value)
+            if isinstance(value, (list, tuple)):
+                return "[" + ", ".join(fmt(item) for item in value) + "]"
+            return json.dumps(str(value), ensure_ascii=False)
 
         current = ""
-        remaining = {sec: dict(vals) for sec, vals in sections.items()}
-        out: list[str] = []
+        remaining = {section: dict(values) for section, values in sections.items()}
+        output: list[str] = []
         for line in lines:
-            m = _re.match(r"^\s*\[([^\]]+)\]\s*$", line)
-            if m:
-                current = m.group(1).strip()
-                out.append(line)
+            section = _re.match(r"^\s*\[([^\]]+)\]\s*$", line)
+            if section:
+                if current in remaining:
+                    output.extend(f"{key} = {fmt(value)}" for key, value in remaining[current].items())
+                    remaining[current].clear()
+                current = section.group(1).strip()
+                output.append(line)
                 continue
-            km = _re.match(r"^(\s*)([A-Za-z0-9_]+)(\s*)=", line)
-            if km and current in remaining:
-                key = km.group(2)
-                if key in remaining[current]:
-                    out.append(f"{key} = {fmt(remaining[current].pop(key))}")
-                    continue
-            out.append(line)
-        for sec, vals in remaining.items():
-            if not vals:
+            key = _re.match(r"^(\s*)([A-Za-z0-9_]+)(\s*)=", line)
+            if current in remaining and key and key.group(2) in remaining[current]:
+                name = key.group(2)
+                output.append(f"{name} = {fmt(remaining[current].pop(name))}")
+            else:
+                output.append(line)
+        if current in remaining:
+            output.extend(f"{key} = {fmt(value)}" for key, value in remaining[current].items())
+            remaining[current].clear()
+        for section, values in remaining.items():
+            if not values:
                 continue
-            if not any(_re.match(r"^\s*\[" + _re.escape(sec) + r"\]\s*$", x) for x in out):
-                out.append(f"[{sec}]")
-            for k, v in vals.items():
-                out.append(f"{k} = {fmt(v)}")
-        text = "\n".join(out) + "\n"
-        path.write_text(text, encoding="utf-8")
+            if not any(_re.match(r"^\s*\[" + _re.escape(section) + r"\]\s*$", line) for line in output):
+                output.extend(["", f"[{section}]"])
+            output.extend(f"{key} = {fmt(value)}" for key, value in values.items())
+
+        text = "\n".join(output) + "\n"
+        temp = path.with_suffix(path.suffix + ".tmp")
         try:
-            self.set_plugin_config(tomllib.loads(text))
-        except Exception:
-            pass
+            parsed = tomllib.loads(text)
+            JmConfig(**{**self.config.jm.model_dump(), **parsed.get("jm", {})})
+            self.normalize_plugin_config(parsed)
+            RootConfig(**parsed)
+            temp.write_text(text, encoding="utf-8")
+            temp.chmod(path.stat().st_mode & 0o777)
+            temp.replace(path)
+            self.set_plugin_config(parsed)
+        except Exception as exc:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise ValueError(f"保存配置失败: {exc}") from exc
 
     # ---------------------------------------------------------------- 触发解析
     def _extract_ids(self, text: str, cfg: JmConfig) -> list[str]:
@@ -1050,7 +1121,7 @@ class JmLookupPlugin(MaiBotPlugin):
                 return (name, author) if name else None
 
             async with self._fetch_lock:
-                res = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=timeout)
+                res = await _run_blocking(_fetch, timeout)
         except Exception as exc:
             self.ctx.logger.warning(f"[jm] 查询 {aid} 失败: {type(exc).__name__}: {exc}")
             res = None
@@ -1096,12 +1167,16 @@ class JmLookupPlugin(MaiBotPlugin):
             except Exception:
                 return False
 
-    async def _send_image(self, stream_id: str, b64: str) -> None:
+    async def _send_image(self, stream_id: str, b64: str) -> bool:
         cfg = self.config.jm
         try:
-            await self.ctx.send.image(b64, stream_id, sync_to_maisaka_history=bool(cfg.inject_context), maisaka_source_kind="manga")
+            return bool(await self.ctx.send.image(
+                b64, stream_id, sync_to_maisaka_history=bool(cfg.inject_context),
+                maisaka_source_kind="manga",
+            ))
         except Exception as exc:
-            self.ctx.logger.warning(f"[jm] 发送封面失败: {type(exc).__name__}: {exc}")
+            self.ctx.logger.warning("封面发送失败: %s", type(exc).__name__)
+            return False
 
     async def _send_forward(
         self, stream_id: str, text: str, cover_b64: str, nick: str = "本子信息"
@@ -1123,26 +1198,38 @@ class JmLookupPlugin(MaiBotPlugin):
         await self._send(stream_id, text, {})
         await self._send_image(stream_id, cover_b64)
 
+    async def _send_result_payload(
+        self, stream_id: str, text: str, cover: str | None,
+        reply_ctx: dict[str, Any], is_private: bool = False,
+    ) -> bool:
+        if self.config.jm.bundle_forward and cover and not is_private:
+            if await self._try_send_forward(stream_id, text, cover, nick="漫画信息"):
+                return True
+        ok = await self._send(stream_id, text, reply_ctx)
+        if cover:
+            ok = bool(await self._send_image(stream_id, cover)) and ok
+        return ok
+
+    async def _prepare_jm_cover(self, aid: int, session_key: str, is_private: bool) -> str | None:
+        cfg = self.config.jm
+        if not self._effective_session_bool("send_cover", bool(cfg.send_cover), session_key, is_private):
+            return None
+        if not self._effective_session_bool("masking_enabled", bool(cfg.masking_enabled), session_key, is_private):
+            return None
+        return await self._prepare_cover(aid)
+
     async def _handle(self, aid: int, stream_id: str, reply_ctx: dict[str, Any]) -> None:
         cfg = self.config.jm
         res = await self._lookup(aid, float(cfg.request_timeout))
         if res is None:
             if cfg.on_not_found == "reply":
-                await self._send(stream_id, cfg.not_found_text or "没搜到这个本子", reply_ctx)
+                await self._send(stream_id, cfg.not_found_text, reply_ctx)
             return
-        text = self._build_text(res, cfg)
-        if not cfg.send_cover:
-            await self._send(stream_id, text, reply_ctx)
-            return
-        cover_b64 = await self._prepare_cover(aid)
-        if cfg.bundle_forward and cover_b64 and not reply_ctx.get("is_private"):
-            await self._send_forward(stream_id, text, cover_b64)
-        else:
-            await self._send(stream_id, text, reply_ctx)
-            if cover_b64:
-                await self._send_image(stream_id, cover_b64)
+        text = self._build_text((self._t2s(res[0]), self._t2s(res[1])), cfg)
+        private = bool(reply_ctx.get("is_private", self._target_is_private(stream_id)))
+        cover = await self._prepare_jm_cover(aid, stream_id, private)
+        await self._send_result_payload(stream_id, text, cover, reply_ctx, is_private=private)
 
-    # ---------------------------------------------------------------- 封面打码（AHM ONNX 服务）
     def _cover_path(self, aid: int) -> str:
         import os  # noqa: PLC0415
 
@@ -1174,12 +1261,7 @@ class JmLookupPlugin(MaiBotPlugin):
         return os.path.join(d, f"cover_{safe}.jpg")
 
     def _is_private(self, kwargs: dict[str, Any]) -> bool:
-        """是不是私聊。OneBot v11 标准模式没有 send_private_forward_msg，
-        私聊里做合并转发必然失败，所以调用方要据此改用分开发。"""
-        msg = kwargs.get("message")
-        if isinstance(msg, dict):
-            return not self._group_of(msg)
-        return False
+        return self._session_ctx(kwargs)[1]
 
     def _target_is_private(self, target: str) -> bool:
         """判断推送目标是不是私聊。
@@ -1188,6 +1270,8 @@ class JmLookupPlugin(MaiBotPlugin):
         也见过纯群号。所以先看关键字，再回退到纯数字判断。
         """
         t = str(target or "").strip()
+        if t in self._session_info:
+            return self._session_info[t].get("chat_type") != "group"
         low = t.lower()
         if "group" in low or "群" in low:
             return False
@@ -1196,28 +1280,62 @@ class JmLookupPlugin(MaiBotPlugin):
         return not t.isdigit()
 
     def _session_ctx(self, kwargs: dict[str, Any]) -> tuple[str, bool]:
-        """从命令参数里取 (session_key, is_private)。"""
+        """从命令参数里取 (session_key, is_private)，缺少 message 时解析 stream_id。"""
         msg = kwargs.get("message")
         if isinstance(msg, dict):
             sid = str(msg.get("session_id") or kwargs.get("stream_id") or "").strip()
-            return sid, not self._group_of(msg)
-        return str(kwargs.get("stream_id") or "").strip(), False
+            gid = self._group_of(msg)
+            info = msg.get("message_info") or {}
+            user = info.get("user_info") or {} if isinstance(info, dict) else {}
+            if sid:
+                self._session_info[sid] = {"group_id": gid, "user_id": str(user.get("user_id") or ""), "chat_type": "group" if gid else "private"}
+            return sid, not bool(gid)
+        sid = str(kwargs.get("stream_id") or "").strip()
+        return sid, self._target_is_private(sid) if sid else False
+
+    def _group_key(self, kwargs: dict[str, Any]) -> str:
+        msg = kwargs.get("message")
+        if isinstance(msg, dict):
+            gid = self._group_of(msg)
+            if gid:
+                return gid
+        sid = str(kwargs.get("stream_id") or "").strip()
+        if self._session_info.get(sid, {}).get("group_id"):
+            return str(self._session_info[sid]["group_id"])
+        match = re.search(r"(?:^|[_:])group[_:](\d+)$", sid, re.IGNORECASE)
+        return match.group(1) if match else ""
 
     def _adult_on(self, session_key: str = "", is_private: bool = False) -> bool:
-        """NSFW 渠道是否已解锁。
-
-        三层：总开关（声明+启用）→ 私聊三态 → 按群覆盖。
-        """
         cfg = self.config.jm
-        if not (
-            getattr(cfg, "adult_declared", False) and getattr(cfg, "adult_enabled", False)
-        ):
+        if not (cfg.adult_declared and cfg.adult_enabled):
             return False
+        if is_private and not self._tri_state(cfg.adult_private, True):
+            return False
+        group_match = re.fullmatch(r"(?:qq_)?group_(\d+)", str(session_key), re.IGNORECASE)
+        if group_match and not self._eff_bool("adult", group_match.group(1), True):
+            return False
+        return self._eff_bool("adult", session_key, True)
+
+    def _command_allowed(self, kwargs: dict[str, Any]) -> bool:
+        cfg = self.config.jm
+        if not self.config.plugin.enabled or not cfg.enabled:
+            return False
+        session_key, is_private = self._session_ctx(kwargs)
         if is_private:
-            return self._tri_state(getattr(cfg, "adult_private", "inherit"), True)
-        if session_key:
-            return self._eff_bool("adult", session_key, True)
-        return True
+            return bool(cfg.allow_private)
+        allowed = {str(item).strip() for item in cfg.allowed_groups if str(item).strip()}
+        group = self._group_key(kwargs)
+        if not group:
+            match = re.fullmatch(r"(?:qq_)?group_(\d+)", session_key, re.IGNORECASE)
+            group = match.group(1) if match else ""
+        return not allowed or group in allowed or session_key in allowed
+
+    def _effective_session_bool(self, key: str, cfg_value: bool, session_key: str, is_private: bool) -> bool:
+        if key == "send_cover" and is_private:
+            cfg_value = self._tri_state(getattr(self.config.jm, "private_send_cover", "inherit"), cfg_value)
+        elif key == "masking_enabled" and is_private:
+            cfg_value = self._tri_state(getattr(self.config.jm, "private_masking_enabled", "inherit"), cfg_value)
+        return self._eff_bool(key, session_key, cfg_value)
 
     def _proxy(self) -> str:
         """当前生效的代理地址（未启用则为空）。所有渠道共用这一个。"""
@@ -1255,22 +1373,27 @@ class JmLookupPlugin(MaiBotPlugin):
             return f"{q} other:non-h".strip()
         return q
 
-    async def _prepare_cover_multi(self, provider: Any, result: LookupResult, tag: str) -> str | None:
-        """按 NSFW 模式处理封面：text=不发 / masked=打码 / raw=原图。"""
+    async def _prepare_cover_multi(
+        self, provider: Any, result: LookupResult, tag: str,
+        session_key: str = "", is_private: bool = False,
+    ) -> str | None:
+        """按会话生效的发图/打码设置处理封面。"""
         cfg = self.config.jm
-        if not result.cover_url:
+        send_cover = self._effective_session_bool("send_cover", bool(cfg.send_cover), session_key, is_private)
+        masking_enabled = self._effective_session_bool("masking_enabled", bool(cfg.masking_enabled), session_key, is_private)
+        if not send_cover or not result.cover_url:
+            return None
+        is_sfw_provider = getattr(provider, "prefix", "") in ("copy", "gm")
+        if not masking_enabled and not (is_sfw_provider and not getattr(cfg, "sfw_cover_mask", False)):
             return None
         data = await provider.cover(result.cover_url, float(cfg.request_timeout))
         if not data:
             return None
-        # 全年龄站（拷贝漫画 / G站漫画）默认直接发原封面，不送打码
-        if getattr(provider, "prefix", "") in ("copy", "gm") and not getattr(
-            cfg, "sfw_cover_mask", False
-        ):
+        if is_sfw_provider and not getattr(cfg, "sfw_cover_mask", False):
             import base64 as _b64  # noqa: PLC0415
 
             return _b64.b64encode(data).decode()
-        if not cfg.masking_enabled:
+        if not masking_enabled:
             return None
         path = self._cover_path_tag(tag)
         try:
@@ -1287,20 +1410,13 @@ class JmLookupPlugin(MaiBotPlugin):
         self, provider: Any, result: LookupResult, stream_id: str,
         reply_ctx: dict[str, Any], tag: str, extra_line: str = "",
         is_private: bool = False,
-    ) -> None:
-        """统一的多渠道发送：标题(+作者)(+链接) 与封面按 NSFW 模式处理。"""
+    ) -> bool:
         cfg = self.config.jm
         text = self._build_text((self._t2s(result.title), self._t2s(result.author)), cfg)
         if extra_line:
-            text = f"{text}\n{extra_line}"
-        cover_b64 = await self._prepare_cover_multi(provider, result, tag)
-        # 私聊没有 send_private_forward_msg，只能分开发
-        if cfg.bundle_forward and cover_b64 and not is_private:
-            await self._send_forward(stream_id, text, cover_b64)
-        else:
-            await self._send(stream_id, text, reply_ctx)
-            if cover_b64:
-                await self._send_image(stream_id, cover_b64)
+            text += "\n" + extra_line
+        cover = await self._prepare_cover_multi(provider, result, tag, stream_id, is_private)
+        return await self._send_result_payload(stream_id, text, cover, reply_ctx, is_private=is_private)
 
     def _providers(self) -> dict[str, Any]:
         """按配置组装可用渠道。"""
@@ -1331,9 +1447,13 @@ class JmLookupPlugin(MaiBotPlugin):
                     hhmm = now.strftime("%H:%M")
                     today = now.strftime("%Y-%m-%d")
                     want = str(getattr(cfg, "daily_time", "09:00") or "09:00").strip()
-                    if hhmm == want and self._daily_last != today:
-                        self._daily_last = today
-                        await self._daily_push()
+                    if hhmm == want and self._daily_last != today and not self._daily_lock.locked():
+                        async with self._daily_lock:
+                            if self._daily_last != today:
+                                self._daily_last = today
+                                completed = await self._daily_push()
+                                if not completed:
+                                    self.ctx.logger.warning("[daily] 今日推荐未完整发送；本日不自动重试以避免重复推送")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1396,15 +1516,15 @@ class JmLookupPlugin(MaiBotPlugin):
             )
         prompt = "\n".join(lines)
         try:
-            res = await self.ctx.call_capability(
-                "llm.generate", prompt=prompt, max_tokens=32, temperature=0.3
-            )
+            res = await asyncio.wait_for(self.ctx.llm.generate(
+                prompt=prompt, max_tokens=32, temperature=0.3
+            ), timeout=float(self.config.jm.request_timeout))
             text = str((res or {}).get("response") or "").strip()
             import re as _re  # noqa: PLC0415
 
-            m = _re.search(r"\d+", text)
+            m = _re.fullmatch(r"\s*(\d+)\s*[.。]?\s*", text)
             if m:
-                idx = int(m.group()) - 1
+                idx = int(m.group(1)) - 1
                 if 0 <= idx < len(cands):
                     self.ctx.logger.info(f"[daily] LLM 选中第 {idx + 1} 本（{text[:20]}）")
                     return idx
@@ -1413,52 +1533,99 @@ class JmLookupPlugin(MaiBotPlugin):
             self.ctx.logger.warning(f"[daily] LLM 审核失败，用第一本: {type(exc).__name__}: {exc}")
         return 0
 
-    async def _daily_build_one(
-        self, session_key: str = "", is_private: bool = False
-    ) -> tuple[Any, LookupResult, str, int] | None:
-        """抓候选 + LLM 挑一本，返回 (provider, item, 关键词, 候选数)。"""
+    async def _daily_build_items(
+        self, count: int, session_key: str = "", is_private: bool = False
+    ) -> list[tuple[Any, LookupResult, str, int]]:
+        """逐次从当前会话可用渠道抓候选，并从未选作品中让 LLM 挑选。"""
         import random  # noqa: PLC0415
 
-        provs = self._daily_providers(session_key, is_private)
-        if not provs:
-            self.ctx.logger.info("[daily] 没有已启用的渠道")
-            return None
-        timeout = float(self.config.jm.request_timeout)
-        kw = random.choice(DAILY_KEYWORDS)
-        cands: list[tuple[Any, LookupResult]] = []
-        for prov in provs:
-            try:
-                items = await prov.search(kw, 5, timeout)
-            except Exception:
-                items = []
-            if items:
-                cands.append((prov, random.choice(items)))
-        if not cands:
-            self.ctx.logger.info(f"[daily] 关键词「{kw}」在所有渠道都没搜到")
-            return None
-        self.ctx.logger.info(f"[daily] 候选 {len(cands)} 本，交给 LLM 审核")
-        idx = await self._llm_pick(cands, kw)
-        prov, item = cands[idx]
-        return prov, item, kw, len(cands)
-
-    async def _daily_push(self) -> None:
         cfg = self.config.jm
-        targets = [str(t).strip() for t in (cfg.daily_targets or []) if str(t).strip()]
+        providers = self._daily_providers(session_key, is_private)
+        timeout = float(cfg.request_timeout)
+        selected: list[tuple[Any, LookupResult, str, int]] = []
+        seen: set[str] = set()
+        for _ in range(max(1, min(5, int(count)))):
+            keyword = random.choice(DAILY_KEYWORDS)
+            candidates: list[tuple[Any, LookupResult]] = []
+            for provider in providers:
+                try:
+                    items = await provider.search(self._search_query(keyword, provider.prefix), 10, timeout)
+                except Exception as exc:
+                    self.ctx.logger.debug("daily candidate search failed: %s", type(exc).__name__)
+                    continue
+                available = [item for item in items if item.url and item.url not in seen]
+                if available:
+                    candidates.append((provider, random.choice(available)))
+            if not candidates:
+                if not selected:
+                    self.ctx.logger.info("[daily] 当前渠道没有可用候选")
+                break
+            index = await self._llm_pick(candidates, keyword)
+            provider, item = candidates[index]
+            seen.add(item.url)
+            selected.append((provider, item, keyword, len(candidates)))
+        return selected
+
+    async def _resolve_daily_targets(self) -> list[str]:
+        streams = await self.ctx.chat.get_all_streams(platform="qq")
+        if not isinstance(streams, list):
+            raise ValueError("聊天流查询未返回列表")
+        for stream in streams:
+            sid = str(stream.get("session_id") or stream.get("stream_id") or "")
+            if sid:
+                self._session_info[sid] = stream
+        targets: list[str] = []
+        for target in self.config.jm.daily_targets:
+            target = str(target).strip()
+            if not target:
+                continue
+            matches = [sid for sid, stream in self._session_info.items()
+                       if sid == target or (stream.get("chat_type") == "group" and str(stream.get("group_id")) == target)]
+            if len(matches) != 1:
+                raise ValueError("推送目标未匹配唯一的现有聊天流，请使用真实会话 ID")
+            if matches[0] not in targets:
+                targets.append(matches[0])
+        return targets
+
+    async def _daily_push(self) -> bool:
+        cfg = self.config.jm
+        if not self.config.plugin.enabled or not cfg.enabled:
+            return False
+        targets = await self._resolve_daily_targets()
         if not targets:
             self.ctx.logger.info("[daily] 未配置推送目标，跳过")
-            return
-        built = await self._daily_build_one()
-        if built is None:
-            return
-        prov, item, kw, cand_n = built
+            return False
+        overall = True
         for target in targets:
+            private = self._target_is_private(target)
+            kwargs = {"stream_id": target}
+            if not self._command_allowed(kwargs):
+                self.ctx.logger.info("[daily] 目标会话未授权，跳过")
+                overall = False
+                continue
             try:
-                await self._send_daily_one(target, prov, item, kw, cand_n)
+                items = await self._daily_build_items(
+                    cfg.daily_count, target, private
+                )
+                if not items:
+                    overall = False
+                    continue
+                for provider, item, keyword, candidate_count in items:
+                    try:
+                        sent = await self._send_daily_one(
+                            target, provider, item, keyword, candidate_count, is_private=private
+                        )
+                        overall = bool(sent) and overall
+                    except Exception as exc:
+                        overall = False
+                        self.ctx.logger.warning("[daily] 推送失败: %s", type(exc).__name__)
             except Exception as exc:
-                self.ctx.logger.warning(f"[daily] 推送到 {target} 失败: {type(exc).__name__}: {exc}")
+                overall = False
+                self.ctx.logger.warning("[daily] 推荐构建失败: %s", type(exc).__name__)
+        return overall
 
     async def _try_send_forward(
-        self, target: str, text: str, cover_b64: str, nick: str = "今日推荐"
+        self, target: str, text: str, cover_b64: str | None, nick: str = "今日推荐"
     ) -> bool:
         """尝试合并转发。返回是否成功（适配器不支持时返回 False，不抛错）。"""
         cfg = self.config.jm
@@ -1466,6 +1633,8 @@ class JmLookupPlugin(MaiBotPlugin):
             {"user_id": "", "nickname": nick, "content": [{"type": "text", "content": text}]},
             {"user_id": "", "nickname": "封面", "content": [{"type": "image", "content": cover_b64}]},
         ]
+        if not cover_b64:
+            nodes = nodes[:1]
         try:
             ok = await self.ctx.send.forward(
                 nodes, target, sync_to_maisaka_history=bool(cfg.inject_context),
@@ -1500,11 +1669,12 @@ class JmLookupPlugin(MaiBotPlugin):
     async def _send_daily_one(
         self, target: str, prov: Any, item: LookupResult, kw: str, cand_n: int = 1,
         is_private: bool | None = None,
-    ) -> None:
+    ) -> bool:
         cfg = self.config.jm
         # 搜索结果往往缺作者/简介，选中后再查一次详情补全
         try:
-            slug = item.url.rstrip("/").split("/")[-1]
+            parts = item.url.rstrip("/").split("/")
+            slug = "/".join(parts[-2:]) if prov.prefix == "eh" else parts[-1]
             full = await prov.detail(slug, float(cfg.request_timeout))
             if full and full.title:
                 item = full
@@ -1522,22 +1692,25 @@ class JmLookupPlugin(MaiBotPlugin):
         lines.append(f"（{self._channel_name(prov)} · 关键词「{kw}」· 从 {cand_n} 本里选出）")
         text = "\n".join(lines)
         cover_b64 = None
-        if getattr(cfg, "daily_cover", True):
-            cover_b64 = await self._prepare_cover_multi(prov, item, f"daily_{abs(hash(item.url)) % 10**8}")
         priv = self._target_is_private(target) if is_private is None else is_private
+        if getattr(cfg, "daily_cover", True):
+            cover_b64 = await self._prepare_cover_multi(
+                prov, item, f"daily_{abs(hash(item.url)) % 10**8}", target, priv
+            )
         want_fwd = bool(getattr(cfg, "daily_forward", True))
         sent = False
         # 1) 合并转发（真·聊天记录卡片）。OneBot v11 标准模式不支持，会抛错
-        if want_fwd and cover_b64 and not priv:
+        if want_fwd and not priv:
             sent = await self._try_send_forward(target, text, cover_b64, nick="今日推荐")
         # 2) 图文混合单条（一条消息里文字+封面）
         if not sent and cover_b64:
             sent = await self._try_send_hybrid(target, text, cover_b64)
         # 3) 兜底：文字 + 图片分开发
         if not sent:
-            await self._send(target, text, {})
+            sent = await self._send(target, text, {})
             if cover_b64:
-                await self._send_image(target, cover_b64)
+                sent = bool(await self._send_image(target, cover_b64)) and sent
+        return sent
 
     async def _search_channels(
         self, q: str, limit: int, timeout: float, tag_mode: bool = False,
@@ -1558,7 +1731,7 @@ class JmLookupPlugin(MaiBotPlugin):
             chans.append(
                 GMangaProvider(str(getattr(cfg, "gmanga_domain", "") or ""), self._proxy())
             )
-        if self._adult_on():
+        if self._adult_on(session_key, is_private):
             if getattr(cfg, "nhentai_enabled", True):
                 chans.append(NhentaiProvider(self._proxy()))
             if getattr(cfg, "eh_enabled", True):
@@ -1576,7 +1749,12 @@ class JmLookupPlugin(MaiBotPlugin):
 
         def _query_for(prov: Any) -> str:
             if tag_mode:
-                return f"tag:{q}" if prov.prefix == "nh" else q
+                if prov.prefix == "nh":
+                    query = f"tag:{q}"
+                    return query + (" tag:non-h" if self._sfw_only() else "")
+                if prov.prefix == "eh":
+                    return self._search_query(q, "eh")
+                return q
             if prov.prefix == "nh":
                 return self._search_query(q, "nh")
             if prov.prefix == "eh":
@@ -1629,7 +1807,7 @@ class JmLookupPlugin(MaiBotPlugin):
             return path if os.path.exists(path) and os.path.getsize(path) > 0 else None
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_dl), timeout=timeout)
+            return await _run_blocking(_dl, timeout)
         except Exception as exc:
             self.ctx.logger.warning(f"[jm] 下载封面 {aid} 失败: {type(exc).__name__}: {exc}")
             return None
@@ -1673,8 +1851,6 @@ class JmLookupPlugin(MaiBotPlugin):
         path = await self._download_cover(aid, float(cfg.request_timeout))
         if not path:
             return None
-        if not cfg.masking_enabled:
-            return None  # 用户选择不使用打码：不发封面（只发标题）
         b64 = await self._ahm_process(path)
         if b64 == "SKIP":
             return None
@@ -1754,7 +1930,7 @@ class JmLookupPlugin(MaiBotPlugin):
         async def _one_api(domain: str) -> dict[str, Any]:
             t0 = time.monotonic()
             try:
-                name = await asyncio.wait_for(asyncio.to_thread(_api_call, domain), timeout=8.0)
+                name = await _run_blocking(lambda: _api_call(domain), 8.0)
                 return {"kind": "API", "domain": domain, "ok": True, "status": "可调用",
                         "ms": int((time.monotonic() - t0) * 1000), "detail": name[:24]}
             except Exception as exc:
@@ -1827,6 +2003,8 @@ class JmLookupPlugin(MaiBotPlugin):
 
     @Command("jmcheck", pattern=r"^/jmcheck$")
     async def handle_jmcheck(self, **kwargs):
+        if not self._command_allowed(kwargs):
+            return False, "当前会话未启用该功能", 1
         stream_id = str(kwargs.get("stream_id") or "").strip()
         st = await self._run_checks()
         if stream_id:
@@ -1842,15 +2020,11 @@ class JmLookupPlugin(MaiBotPlugin):
         raw = str((kwargs.get("matched_groups") or {}).get("id") or "").strip()
         if not raw or not stream_id:
             return False, "用法：/jm 123456", 1
+        cfg = self.config.jm
+        if not self._group_ok(kwargs):
+            return False, "本群未启用该功能", 1
         if not self._adult_on(*self._session_ctx(kwargs)):
             return False, "NSFW 渠道未解锁", 1
-        cfg = self.config.jm
-        groups = [str(g).strip() for g in (cfg.allowed_groups or []) if str(g).strip()]
-        if groups:
-            msg = kwargs.get("message") or {}
-            gid = self._group_of(msg) if isinstance(msg, dict) else ""
-            if not ((gid and gid in groups) or (stream_id in groups)):
-                return False, "本群未启用该功能", 1
         reply_ctx: dict[str, Any] = {}
         msg = kwargs.get("message")
         if isinstance(msg, dict):
@@ -1859,28 +2033,23 @@ class JmLookupPlugin(MaiBotPlugin):
             reply_ctx = {"message_id": str(kwargs.get("message_id")), "content": ""}
         res = await self._lookup(int(raw), float(cfg.request_timeout))
         text = (cfg.not_found_text or "没搜到这个本子") if res is None else self._build_text(res, cfg)
-        if res is not None and cfg.send_cover:
-            cover_b64 = await self._prepare_cover(int(raw))
-            if cfg.bundle_forward and cover_b64:
-                await self._send_forward(stream_id, text, cover_b64)
-            else:
+        if res is None:
+            if cfg.on_not_found == "reply":
                 await self._send(stream_id, text, reply_ctx)
-                if cover_b64:
-                    await self._send_image(stream_id, cover_b64)
-        else:
-            await self._send(stream_id, text, reply_ctx)
+            return False, text, 1
+
+        session_key, is_private = self._session_ctx(kwargs)
+        cover_b64 = None
+        if self._effective_session_bool("send_cover", bool(cfg.send_cover), session_key, is_private):
+            cover_b64 = await self._prepare_jm_cover(int(raw), session_key, is_private)
+        await self._send_result_payload(
+            stream_id, text, cover_b64, reply_ctx, is_private=is_private
+        )
         return True, text, 1
 
     def _group_ok(self, kwargs: dict[str, Any]) -> bool:
-        """命令入口用的权限检查（原 _group_allowed 是 hook 用的，签名不同，别重名）。"""
-        cfg = self.config.jm
-        groups = [str(g).strip() for g in (cfg.allowed_groups or []) if str(g).strip()]
-        if not groups:
-            return True
-        stream_id = str(kwargs.get("stream_id") or "").strip()
-        msg = kwargs.get("message") or {}
-        gid = self._group_of(msg) if isinstance(msg, dict) else ""
-        return bool((gid and gid in groups) or (stream_id in groups))
+        """命令共享总开关、私聊权限和群白名单。"""
+        return self._command_allowed(kwargs)
 
     def _reply_ctx_of(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         msg = kwargs.get("message")
@@ -2033,14 +2202,14 @@ class JmLookupPlugin(MaiBotPlugin):
         if not self._group_ok(kwargs):
             return False, "本群未启用该功能", 1
         _sk, _pv = self._session_ctx(kwargs)
-        built = await self._daily_build_one(_sk, _pv)
-        if built is None:
+        built = await self._daily_build_items(1, _sk, _pv)
+        if not built:
             return False, "没抓到合适的推荐，稍后再试", 1
-        prov, item, kw, cand_n = built
-        await self._send_daily_one(
-            stream_id, prov, item, kw, cand_n, is_private=self._is_private(kwargs)
+        prov, item, kw, cand_n = built[0]
+        sent = await self._send_daily_one(
+            stream_id, prov, item, kw, cand_n, is_private=_pv
         )
-        return True, f"已推送：{item.title}", 1
+        return (True, f"已推送：{item.title}", 1) if sent else (False, "推荐发送失败", 1)
 
     @Command("jmhelp", pattern=r"^/(?:搜漫帮助|本帮助|jmhelp|帮助)$")
     async def handle_help_command(self, **kwargs):
@@ -2101,17 +2270,19 @@ class JmLookupPlugin(MaiBotPlugin):
         cfg = self.config.jm
         if not self.config.plugin.enabled or not cfg.enabled:
             return {}
-        # 自动识别的前缀（JM/禁漫/本子）全是 R18 站，没解锁就整条链路关掉
-        if not self._adult_on(*self._session_ctx(kwargs)):
-            return {}
         message = kwargs.get("message") or {}
         if not isinstance(message, dict):
             return {}
         stream_id = str(message.get("session_id") or "").strip()
         if not stream_id or not self._group_allowed(cfg, message):
             return {}
+        if not self._adult_on(*self._session_ctx(kwargs)):
+            return {}
         text = self._current_text(message)
         if not text:
+            return {}
+        # 斜杠命令由 @Command 处理，这里再识别一次会重复发送同一条结果。
+        if text.lstrip().startswith("/"):
             return {}
         ids = self._extract_ids(text, cfg)
         if not ids:
@@ -2152,36 +2323,7 @@ class JmLookupPlugin(MaiBotPlugin):
         return opts
 
     def _write_config_values(self, values: dict[str, Any]) -> None:
-        """把少量配置写回插件目录 config.toml，并同步内存配置实例。"""
-        import re as _re  # noqa: PLC0415
-        import tomllib  # noqa: PLC0415
-        from pathlib import Path  # noqa: PLC0415
-
-        path = Path(__file__).resolve().with_name("config.toml")
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            text = ""
-        for key, val in values.items():
-            if isinstance(val, bool):
-                raw = "true" if val else "false"
-            elif isinstance(val, (int, float)):
-                raw = str(val)
-            else:
-                raw = '"' + str(val).replace('"', '\"') + '"'
-            pattern = rf"(?m)^{_re.escape(key)}\s*=.*$"
-            line = f"{key} = {raw}"
-            if _re.search(pattern, text):
-                text = _re.sub(pattern, line, text, count=1)
-            else:
-                if text and not text.endswith("\n"):
-                    text += "\n"
-                text += line + "\n"
-        path.write_text(text, encoding="utf-8")
-        try:
-            self.set_plugin_config(tomllib.loads(text))
-        except Exception:
-            pass
+        self._write_toml_sections({"jm": values})
 
     @API("webui_status", description="WebUI：当前设置与检测状态", version="1", public=False)
     async def api_webui_status(self):
@@ -2336,11 +2478,16 @@ class JmLookupPlugin(MaiBotPlugin):
         if not key:
             raise ValueError("请填写群号或私聊会话ID")
         entry: dict[str, Any] = {}
-        for field in ("send_cover", "masking_enabled"):
+        for field in ("send_cover", "masking_enabled", "adult"):
             val = data.get(field)
             if val is None or val == "inherit":
                 continue
-            entry[field] = bool(val)
+            if isinstance(val, bool):
+                entry[field] = val
+            elif val in ("true", "false"):
+                entry[field] = val == "true"
+            else:
+                raise ValueError(f"{field} 必须为 true、false 或 inherit")
         if entry:
             self._session_overrides[key] = entry
         else:
