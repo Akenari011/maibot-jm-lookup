@@ -1932,12 +1932,29 @@ class JmLookupPlugin(MaiBotPlugin):
         proc = getattr(self, "_mask_proc", None)
         return proc is not None and proc.poll() is None
 
+    async def _mask_port_in_use(self) -> bool:
+        """目标端口已有服务在监听（通常是 systemd 常驻实例），此时不该再起一份。"""
+        import socket
+
+        api = str(self.config.jm.ahm_api_url or "")
+        match = re.search(r"//([^/:]+)(?::(\d+))?", api)
+        host = match.group(1) if match else "127.0.0.1"
+        port = int(match.group(2)) if match and match.group(2) else 8000
+        try:
+            with socket.create_connection((host, port), timeout=1.5):
+                return True
+        except OSError:
+            return False
+
     async def _mask_start(self) -> ConfigWidgetState:
         import subprocess
 
         if not self._mask_running():
             if not self._mask_binary().exists():
                 return ConfigWidgetState(text="打码服务未安装，请先执行 /打码安装", tone="warning")
+            if await self._mask_port_in_use():
+                self.ctx.logger.info("打码端口已被占用，跳过插件托管启动（可能已有 systemd 实例）")
+                return ConfigWidgetState(text="打码端口已有服务在运行，跳过托管启动", tone="neutral")
             try:
                 self._mask_proc = subprocess.Popen(  # noqa: S603
                     [str(self._mask_binary())],
@@ -2385,6 +2402,10 @@ class JmLookupPlugin(MaiBotPlugin):
             return False, "用法：/打码安装", 1
         if not self._command_allowed(kwargs):
             return False, "本群未启用该功能", 1
+        if await self._mask_port_in_use():
+            text = f"打码服务已在运行（{self.config.jm.ahm_api_url}），无需重复安装。"
+            await self._send(stream_id, text, self._reply_ctx_of(kwargs))
+            return True, text, 1
         state = await self._mask_install()
         if state.tone != "success":
             return False, state.text, 1

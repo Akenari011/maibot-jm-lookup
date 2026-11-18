@@ -503,3 +503,31 @@ def test_mask_install_cleans_temp_files_on_failure(tmp_path, monkeypatch):
     state = asyncio.run(plugin._mask_install())
     assert state.tone == "error"
     assert list(tmp_path.glob("*.part")) == []
+
+
+def test_mask_start_skips_when_port_already_serving(tmp_path, monkeypatch):
+    plugin = make_plugin()
+    plugin.config.jm.mask_install_dir = str(tmp_path)
+    (tmp_path / "jm-mask-rs").write_text("#!/bin/sh\n")
+    (tmp_path / "jm-mask-rs").chmod(0o755)
+    async def in_use():
+        return True
+    monkeypatch.setattr(plugin, "_mask_port_in_use", in_use)
+    state = asyncio.run(plugin._mask_start())
+    assert state.tone == "neutral"
+    assert not plugin._mask_running()
+
+
+def test_mask_port_in_use_detects_listening_socket():
+    import socket
+    plugin = make_plugin()
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    plugin.config.jm.ahm_api_url = f"http://127.0.0.1:{port}/process/"
+    try:
+        assert asyncio.run(plugin._mask_port_in_use()) is True
+    finally:
+        srv.close()
+    assert asyncio.run(plugin._mask_port_in_use()) is False
