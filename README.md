@@ -171,14 +171,36 @@ POST http://127.0.0.1:8000/process/
 
 ### 部署
 
-```bash
-# 依赖（不需要 torch）
-pip install onnxruntime fastapi uvicorn pillow numpy
+推荐用单文件 Rust 服务 [jm-mask-rs](https://github.com/Akenari011/jm-mask-rs)：
+不需要 Python、venv 或 pip，约 104 MB 共 4 个文件。
 
-# systemd
-# WorkingDirectory=/path/to/AutoHajimiMosaic
-# ExecStart=.../uvicorn onnx_api:app --host 127.0.0.1 --port 8000
+```bash
+# 1) 准备四件套
+#    jm-mask-rs 二进制、libonnxruntime.so、
+#    segmentation_model.onnx、classification_model.onnx
+mkdir -p ~/jm-mask && cd ~/jm-mask
+
+# 2) 前台试跑
+MASK_ADDR=127.0.0.1:8000 \
+MASK_ORT_DYLIB="$PWD/libonnxruntime.so" \
+MASK_SEG_MODEL="$PWD/segmentation_model.onnx" \
+MASK_CLS_MODEL="$PWD/classification_model.onnx" \
+./jm-mask-rs
+
+# 3) 常驻
+# [Service]
+# WorkingDirectory=/home/user/jm-mask
+# Environment=MASK_ADDR=127.0.0.1:8000
+# Environment=MASK_ORT_DYLIB=/home/user/jm-mask/libonnxruntime.so
+# Environment=MASK_SEG_MODEL=/home/user/jm-mask/segmentation_model.onnx
+# Environment=MASK_CLS_MODEL=/home/user/jm-mask/classification_model.onnx
+# ExecStart=/home/user/jm-mask/jm-mask-rs
+# Restart=always
 ```
+
+也可以用原版 Python 服务（AutoHajimiMosaic，`pip install onnxruntime fastapi uvicorn pillow numpy` + `uvicorn onnx_api:app`），但体积约 800 MB，启动也更慢。
+
+> 二进制不静态链接 onnxruntime，**必须**通过 `MASK_ORT_DYLIB` 指向 `libonnxruntime.so`，否则启动即失败。只监听 `127.0.0.1`，不要暴露到公网。
 
 ### 实测性能
 
