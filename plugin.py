@@ -741,8 +741,8 @@ class JmConfig(PluginConfigBase):
         default="http://127.0.0.1:8000/process/", description="打码服务 API 地址",
         json_schema_extra={"label": "打码 API 地址", "hint": "本地打码服务接口（默认 http://127.0.0.1:8000/process/）。部署方式见 README / install.sh。", "order": 17})
     ahm_auto_install: bool = Field(
-        default=False, description="自动安装打码服务",
-        json_schema_extra={"label": "自动安装打码服务", "hint": "开启后首次加载会从 jm-mask-rs 的 Release 下载约 53-80 MB 运行时并启动本地服务；默认关闭，也可用「/打码安装」手动安装。", "order": 17})
+        default=True, description="自动安装打码服务",
+        json_schema_extra={"label": "自动安装打码服务", "hint": "首次加载时如果打码服务不可用，会自动从 jm-mask-rs 的 Release 下载约 53-80 MB 运行时并启动，无需手动操作。已有 systemd 实例时会自动跳过。", "order": 17})
     mask_install_dir: str = Field(
         default="", description="打码服务安装目录",
         json_schema_extra={"label": "安装目录", "hint": "留空则装在插件数据目录下的 jm-mask-rs；可指定绝对路径。", "order": 19})
@@ -1984,17 +1984,25 @@ class JmLookupPlugin(MaiBotPlugin):
         self._mask_proc = None
 
     async def _mask_ensure(self) -> None:
+        """首次加载时确保打码服务可用：已运行则跳过，未安装则自动装好并启动。"""
         cfg = self.config.jm
         if not getattr(cfg, "ahm_manage_process", True):
             return
         if self._mask_running():
             return
-        if not self._mask_binary().exists() and getattr(cfg, "ahm_auto_install", False):
+        if await self._mask_port_in_use():
+            self.ctx.logger.info("打码服务已在运行，跳过自动安装")
+            return
+        if not self._mask_binary().exists():
+            if not getattr(cfg, "ahm_auto_install", True):
+                self.ctx.logger.info("打码服务未安装，且自动安装已关闭")
+                return
             state = await self._mask_install()
             self.ctx.logger.info("打码服务自动安装: %s", state.text)
-        if self._mask_binary().exists():
-            state = await self._mask_start()
-            self.ctx.logger.info("打码服务: %s", state.text)
+            if state.tone != "success":
+                return
+        state = await self._mask_start()
+        self.ctx.logger.info("打码服务: %s", state.text)
 
     async def _ahm_process(self, path: str) -> str | None:
         """调 AHM ONNX 服务打码；返回打码图 base64 / 'SKIP'(不发) / None(失败)。"""
@@ -2394,28 +2402,6 @@ class JmLookupPlugin(MaiBotPlugin):
             stream_id, prov, item, kw, cand_n, is_private=_pv
         )
         return (True, f"已推送：{item.title}", 1) if sent else (False, "推荐发送失败", 1)
-
-    @Command("maskinstall", pattern=r"^/(?:打码安装|maskinstall)$")
-    async def handle_mask_install(self, **kwargs):
-        stream_id = str(kwargs.get("stream_id") or "").strip()
-        if not stream_id:
-            return False, "用法：/打码安装", 1
-        if not self._command_allowed(kwargs):
-            return False, "本群未启用该功能", 1
-        if await self._mask_port_in_use():
-            text = f"打码服务已在运行（{self.config.jm.ahm_api_url}），无需重复安装。"
-            await self._send(stream_id, text, self._reply_ctx_of(kwargs))
-            return True, text, 1
-        state = await self._mask_install()
-        if state.tone != "success":
-            return False, state.text, 1
-        if getattr(self.config.jm, "ahm_manage_process", True):
-            start = await self._mask_start()
-            text = f"{state.text}\n{start.text}"
-        else:
-            text = state.text
-        await self._send(stream_id, text, self._reply_ctx_of(kwargs))
-        return True, text, 1
 
     @Command("jmhelp", pattern=r"^/(?:搜漫帮助|本帮助|jmhelp|帮助)$")
     async def handle_help_command(self, **kwargs):

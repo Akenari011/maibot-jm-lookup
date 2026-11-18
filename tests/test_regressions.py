@@ -283,7 +283,7 @@ def test_timed_out_blocking_calls_keep_their_concurrency_slots():
 def test_actual_sdk_registers_commands_apis_and_hook():
     plugin = make_plugin()
     components = plugin.get_components()
-    assert len(components) == 25
+    assert len(components) == 24
 
 
 def test_webui_fields_match_backend_without_duplicates():
@@ -531,3 +531,57 @@ def test_mask_port_in_use_detects_listening_socket():
     finally:
         srv.close()
     assert asyncio.run(plugin._mask_port_in_use()) is False
+
+
+def test_ensure_skips_when_port_already_serving(tmp_path, monkeypatch):
+    plugin = make_plugin()
+    plugin.config.jm.mask_install_dir = str(tmp_path)
+    calls = []
+    async def in_use():
+        return True
+    async def install():
+        calls.append("install")
+        raise AssertionError("should not install")
+    monkeypatch.setattr(plugin, "_mask_port_in_use", in_use)
+    monkeypatch.setattr(plugin, "_mask_install", install)
+    asyncio.run(plugin._mask_ensure())
+    assert calls == []
+
+
+def test_ensure_auto_installs_when_missing(tmp_path, monkeypatch):
+    plugin = make_plugin()
+    plugin.config.jm.mask_install_dir = str(tmp_path)
+    plugin.config.jm.ahm_auto_install = True
+    plugin.config.jm.ahm_manage_process = True
+    calls = []
+    async def not_in_use():
+        return False
+    async def install():
+        calls.append("install")
+        (tmp_path / "jm-mask-rs").write_text("#!/bin/sh\n")
+        (tmp_path / "jm-mask-rs").chmod(0o755)
+        return plugin_module.ConfigWidgetState(text="installed", tone="success")
+    async def start():
+        calls.append("start")
+        return plugin_module.ConfigWidgetState(text="running", tone="success")
+    monkeypatch.setattr(plugin, "_mask_port_in_use", not_in_use)
+    monkeypatch.setattr(plugin, "_mask_install", install)
+    monkeypatch.setattr(plugin, "_mask_start", start)
+    asyncio.run(plugin._mask_ensure())
+    assert calls == ["install", "start"]
+
+
+def test_ensure_respects_disabled_auto_install(tmp_path, monkeypatch):
+    plugin = make_plugin()
+    plugin.config.jm.mask_install_dir = str(tmp_path)
+    plugin.config.jm.ahm_auto_install = False
+    calls = []
+    async def not_in_use():
+        return False
+    async def install():
+        calls.append("install")
+        return plugin_module.ConfigWidgetState(text="x", tone="success")
+    monkeypatch.setattr(plugin, "_mask_port_in_use", not_in_use)
+    monkeypatch.setattr(plugin, "_mask_install", install)
+    asyncio.run(plugin._mask_ensure())
+    assert calls == []
